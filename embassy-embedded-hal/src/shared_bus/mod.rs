@@ -8,12 +8,15 @@ pub mod asynch;
 
 pub mod blocking;
 
+/// Error returned by I2C device implementations in this crate.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub enum I2cBusDeviceError<BUS> {
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum I2cDeviceError<BUS> {
+    /// An operation on the inner I2C bus failed.
     I2c(BUS),
 }
 
-impl<BUS> i2c::Error for I2cBusDeviceError<BUS>
+impl<BUS> i2c::Error for I2cDeviceError<BUS>
 where
     BUS: i2c::Error + Debug,
 {
@@ -24,13 +27,17 @@ where
     }
 }
 
+/// Error returned by SPI device implementations in this crate.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub enum SpiBusDeviceError<BUS, CS> {
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SpiDeviceError<BUS, CS> {
+    /// An operation on the inner SPI bus failed.
     Spi(BUS),
+    /// Setting the value of the Chip Select (CS) pin failed.
     Cs(CS),
 }
 
-impl<BUS, CS> spi::Error for SpiBusDeviceError<BUS, CS>
+impl<BUS, CS> spi::Error for SpiDeviceError<BUS, CS>
 where
     BUS: spi::Error + Debug,
     CS: Debug,

@@ -1,11 +1,10 @@
 #![macro_use]
 use core::convert::Infallible;
-use core::marker::PhantomData;
 
-use embassy_hal_common::{unborrow, unsafe_impl_unborrow};
+use embassy_hal_common::{impl_peripheral, into_ref, PeripheralRef};
 
 use crate::pac::gpio::{self, vals};
-use crate::{pac, peripherals, Unborrow};
+use crate::{pac, peripherals, Peripheral};
 
 /// GPIO flexible pin.
 ///
@@ -13,8 +12,7 @@ use crate::{pac, peripherals, Unborrow};
 /// set while not in output mode, so the pin's level will be 'remembered' when it is not in output
 /// mode.
 pub struct Flex<'d, T: Pin> {
-    pub(crate) pin: T,
-    phantom: PhantomData<&'d mut T>,
+    pub(crate) pin: PeripheralRef<'d, T>,
 }
 
 impl<'d, T: Pin> Flex<'d, T> {
@@ -24,13 +22,10 @@ impl<'d, T: Pin> Flex<'d, T> {
     /// before the pin is put into output mode.
     ///
     #[inline]
-    pub fn new(pin: impl Unborrow<Target = T> + 'd) -> Self {
-        unborrow!(pin);
+    pub fn new(pin: impl Peripheral<P = T> + 'd) -> Self {
+        into_ref!(pin);
         // Pin will be in disconnected state.
-        Self {
-            pin,
-            phantom: PhantomData,
-        }
+        Self { pin }
     }
 
     /// Put the pin into input mode.
@@ -142,6 +137,11 @@ impl<'d, T: Pin> Flex<'d, T> {
     }
 
     #[inline]
+    pub fn get_level(&self) -> Level {
+        self.is_high().into()
+    }
+
+    #[inline]
     pub fn is_set_high(&self) -> bool {
         !self.is_set_low()
     }
@@ -153,6 +153,12 @@ impl<'d, T: Pin> Flex<'d, T> {
         state == vals::Odr::LOW
     }
 
+    /// What level output is set to
+    #[inline]
+    pub fn get_output_level(&self) -> Level {
+        self.is_set_high().into()
+    }
+
     #[inline]
     pub fn set_high(&mut self) {
         self.pin.set_high();
@@ -162,6 +168,14 @@ impl<'d, T: Pin> Flex<'d, T> {
     #[inline]
     pub fn set_low(&mut self) {
         self.pin.set_low();
+    }
+
+    #[inline]
+    pub fn set_level(&mut self, level: Level) {
+        match level {
+            Level::Low => self.pin.set_low(),
+            Level::High => self.pin.set_high(),
+        }
     }
 
     /// Toggle pin output
@@ -266,7 +280,7 @@ pub struct Input<'d, T: Pin> {
 
 impl<'d, T: Pin> Input<'d, T> {
     #[inline]
-    pub fn new(pin: impl Unborrow<Target = T> + 'd, pull: Pull) -> Self {
+    pub fn new(pin: impl Peripheral<P = T> + 'd, pull: Pull) -> Self {
         let mut pin = Flex::new(pin);
         pin.set_as_input(pull);
         Self { pin }
@@ -281,6 +295,11 @@ impl<'d, T: Pin> Input<'d, T> {
     pub fn is_low(&self) -> bool {
         self.pin.is_low()
     }
+
+    #[inline]
+    pub fn get_level(&self) -> Level {
+        self.pin.get_level()
+    }
 }
 
 /// Digital input or output level.
@@ -291,6 +310,24 @@ pub enum Level {
     High,
 }
 
+impl From<bool> for Level {
+    fn from(val: bool) -> Self {
+        match val {
+            true => Self::High,
+            false => Self::Low,
+        }
+    }
+}
+
+impl Into<bool> for Level {
+    fn into(self) -> bool {
+        match self {
+            Level::Low => false,
+            Level::High => true,
+        }
+    }
+}
+
 /// GPIO output driver.
 pub struct Output<'d, T: Pin> {
     pub(crate) pin: Flex<'d, T>,
@@ -298,7 +335,7 @@ pub struct Output<'d, T: Pin> {
 
 impl<'d, T: Pin> Output<'d, T> {
     #[inline]
-    pub fn new(pin: impl Unborrow<Target = T> + 'd, initial_output: Level, speed: Speed) -> Self {
+    pub fn new(pin: impl Peripheral<P = T> + 'd, initial_output: Level, speed: Speed) -> Self {
         let mut pin = Flex::new(pin);
         match initial_output {
             Level::High => pin.set_high(),
@@ -320,6 +357,12 @@ impl<'d, T: Pin> Output<'d, T> {
         self.pin.set_low();
     }
 
+    /// Set the output level.
+    #[inline]
+    pub fn set_level(&mut self, level: Level) {
+        self.pin.set_level(level)
+    }
+
     /// Is the output pin set as high?
     #[inline]
     pub fn is_set_high(&self) -> bool {
@@ -330,6 +373,12 @@ impl<'d, T: Pin> Output<'d, T> {
     #[inline]
     pub fn is_set_low(&self) -> bool {
         self.pin.is_set_low()
+    }
+
+    /// What level output is set to
+    #[inline]
+    pub fn get_output_level(&self) -> Level {
+        self.pin.get_output_level()
     }
 
     /// Toggle pin output
@@ -346,7 +395,7 @@ pub struct OutputOpenDrain<'d, T: Pin> {
 
 impl<'d, T: Pin> OutputOpenDrain<'d, T> {
     #[inline]
-    pub fn new(pin: impl Unborrow<Target = T> + 'd, initial_output: Level, speed: Speed, pull: Pull) -> Self {
+    pub fn new(pin: impl Peripheral<P = T> + 'd, initial_output: Level, speed: Speed, pull: Pull) -> Self {
         let mut pin = Flex::new(pin);
 
         match initial_output {
@@ -368,6 +417,12 @@ impl<'d, T: Pin> OutputOpenDrain<'d, T> {
         self.pin.is_low()
     }
 
+    /// Returns current pin level
+    #[inline]
+    pub fn get_level(&self) -> Level {
+        self.pin.get_level()
+    }
+
     /// Set the output as high.
     #[inline]
     pub fn set_high(&mut self) {
@@ -380,16 +435,28 @@ impl<'d, T: Pin> OutputOpenDrain<'d, T> {
         self.pin.set_low();
     }
 
+    /// Set the output level.
+    #[inline]
+    pub fn set_level(&mut self, level: Level) {
+        self.pin.set_level(level);
+    }
+
     /// Is the output pin set as high?
     #[inline]
     pub fn is_set_high(&self) -> bool {
-        !self.is_set_low()
+        self.pin.is_set_high()
     }
 
     /// Is the output pin set as low?
     #[inline]
     pub fn is_set_low(&self) -> bool {
         self.pin.is_set_low()
+    }
+
+    /// What level output is set to
+    #[inline]
+    pub fn get_output_level(&self) -> Level {
+        self.pin.get_output_level()
     }
 
     /// Toggle pin output
@@ -554,7 +621,7 @@ pub(crate) mod sealed {
     }
 }
 
-pub trait Pin: sealed::Pin + Sized + 'static {
+pub trait Pin: Peripheral<P = Self> + Into<AnyPin> + sealed::Pin + Sized + 'static {
     #[cfg(feature = "exti")]
     type ExtiChannel: crate::exti::Channel;
 
@@ -601,7 +668,7 @@ impl AnyPin {
     }
 }
 
-unsafe_impl_unborrow!(AnyPin);
+impl_peripheral!(AnyPin);
 impl Pin for AnyPin {
     #[cfg(feature = "exti")]
     type ExtiChannel = crate::exti::AnyChannel;
@@ -625,6 +692,12 @@ foreach_pin!(
             #[inline]
             fn pin_port(&self) -> u8 {
                 $port_num * 16 + $pin_num
+            }
+        }
+
+        impl From<peripherals::$pin_name> for AnyPin {
+            fn from(x: peripherals::$pin_name) -> Self {
+                x.degrade()
             }
         }
     };

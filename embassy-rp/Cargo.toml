@@ -27,7 +27,7 @@ nightly = ["embassy/nightly", "embedded-hal-1", "embedded-hal-async", "embassy-e
 unstable-traits = ["embedded-hal-1"]
 
 [dependencies]
-embassy = { version = "0.1.0", path = "../embassy", features = [ "time-tick-1mhz", "nightly"] }
+embassy = { version = "0.1.0", path = "../embassy", features = [ "time-tick-1mhz" ] }
 embassy-cortex-m = { version = "0.1.0", path = "../embassy-cortex-m", features = ["prio-bits-3"]}
 embassy-hal-common = {version = "0.1.0", path = "../embassy-hal-common" }
 embassy-embedded-hal = {version = "0.1.0", path = "../embassy-embedded-hal" }
@@ -38,6 +38,7 @@ log = { version = "0.4.14", optional = true }
 cortex-m-rt = ">=0.6.15,<0.8"
 cortex-m = "0.7.3"
 critical-section = "0.2.5"
+futures = { version = "0.3.17", default-features = false, features = ["async-await"] }
 
 rp2040-pac2 = { git = "https://github.com/embassy-rs/rp2040-pac2", rev="9ad7223a48a065e612bc7dc7be5bf5bd0b41cfc4", features = ["rt"] }
 #rp2040-pac2 = { path = "../../rp/rp2040-pac2", features = ["rt"] }

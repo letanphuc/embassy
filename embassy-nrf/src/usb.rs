@@ -7,7 +7,7 @@ use core::task::Poll;
 
 use cortex_m::peripheral::NVIC;
 use embassy::waitqueue::AtomicWaker;
-use embassy_hal_common::unborrow;
+use embassy_hal_common::{into_ref, PeripheralRef};
 pub use embassy_usb;
 use embassy_usb::driver::{self, EndpointError, Event, Unsupported};
 use embassy_usb::types::{EndpointAddress, EndpointInfo, EndpointType, UsbDirection};
@@ -17,7 +17,7 @@ use pac::usbd::RegisterBlock;
 
 use crate::interrupt::{Interrupt, InterruptExt};
 use crate::util::slice_in_ram;
-use crate::{pac, Unborrow};
+use crate::{pac, Peripheral};
 
 const NEW_AW: AtomicWaker = AtomicWaker::new();
 static BUS_WAKER: AtomicWaker = NEW_AW;
@@ -38,7 +38,7 @@ pub trait UsbSupply {
 }
 
 pub struct Driver<'d, T: Instance, P: UsbSupply> {
-    phantom: PhantomData<&'d mut T>,
+    _p: PeripheralRef<'d, T>,
     alloc_in: Allocator,
     alloc_out: Allocator,
     usb_supply: P,
@@ -47,7 +47,9 @@ pub struct Driver<'d, T: Instance, P: UsbSupply> {
 /// Uses the POWER peripheral to detect when power is available
 /// for USB. Unsuitable for usage with the nRF softdevice.
 #[cfg(not(feature = "_nrf5340-app"))]
-pub struct PowerUsb {}
+pub struct PowerUsb {
+    _private: (),
+}
 
 /// Can be used to signal that power is available. Particularly suited for
 /// use with the nRF softdevice.
@@ -70,7 +72,7 @@ impl PowerUsb {
         regs.intenset
             .write(|w| w.usbdetected().set().usbremoved().set().usbpwrrdy().set());
 
-        Self {}
+        Self { _private: () }
     }
 
     #[cfg(not(feature = "_nrf5340-app"))]
@@ -164,18 +166,14 @@ impl UsbSupply for SignalledSupply {
 }
 
 impl<'d, T: Instance, P: UsbSupply> Driver<'d, T, P> {
-    pub fn new(
-        _usb: impl Unborrow<Target = T> + 'd,
-        irq: impl Unborrow<Target = T::Interrupt> + 'd,
-        usb_supply: P,
-    ) -> Self {
-        unborrow!(irq);
+    pub fn new(usb: impl Peripheral<P = T> + 'd, irq: impl Peripheral<P = T::Interrupt> + 'd, usb_supply: P) -> Self {
+        into_ref!(usb, irq);
         irq.set_handler(Self::on_interrupt);
         irq.unpend();
         irq.enable();
 
         Self {
-            phantom: PhantomData,
+            _p: usb,
             alloc_in: Allocator::new(),
             alloc_out: Allocator::new(),
             usb_supply,
@@ -271,15 +269,15 @@ impl<'d, T: Instance, P: UsbSupply + 'd> driver::Driver<'d> for Driver<'d, T, P>
         }))
     }
 
-    fn start(self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
+    fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
         (
             Bus {
-                phantom: PhantomData,
+                _p: unsafe { self._p.clone_unchecked() },
                 power_available: false,
                 usb_supply: self.usb_supply,
             },
             ControlPipe {
-                _phantom: PhantomData,
+                _p: self._p,
                 max_packet_size: control_max_packet_size,
             },
         )
@@ -287,7 +285,7 @@ impl<'d, T: Instance, P: UsbSupply + 'd> driver::Driver<'d> for Driver<'d, T, P>
 }
 
 pub struct Bus<'d, T: Instance, P: UsbSupply> {
-    phantom: PhantomData<&'d mut T>,
+    _p: PeripheralRef<'d, T>,
     power_available: bool,
     usb_supply: P,
 }
@@ -748,7 +746,7 @@ impl<'d, T: Instance> driver::EndpointIn for Endpoint<'d, T, In> {
 }
 
 pub struct ControlPipe<'d, T: Instance> {
-    _phantom: PhantomData<&'d mut T>,
+    _p: PeripheralRef<'d, T>,
     max_packet_size: u16,
 }
 
@@ -948,7 +946,7 @@ pub(crate) mod sealed {
     }
 }
 
-pub trait Instance: Unborrow<Target = Self> + sealed::Instance + 'static + Send {
+pub trait Instance: Peripheral<P = Self> + sealed::Instance + 'static + Send {
     type Interrupt: Interrupt;
 }
 
