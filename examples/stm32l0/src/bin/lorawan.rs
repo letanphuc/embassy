@@ -3,29 +3,27 @@
 #![no_main]
 #![macro_use]
 #![allow(dead_code)]
-#![feature(generic_associated_types)]
 #![feature(type_alias_impl_trait)]
 
+use embassy_executor::Spawner;
 use embassy_lora::sx127x::*;
 use embassy_lora::LoraTimer;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::rng::Rng;
+use embassy_stm32::spi;
 use embassy_stm32::time::khz;
-use embassy_stm32::{spi, Peripherals};
 use lorawan::default_crypto::DefaultFactory as Crypto;
 use lorawan_device::async_device::{region, Device, JoinMode};
 use {defmt_rtt as _, panic_probe as _};
 
-fn config() -> embassy_stm32::Config {
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
     let mut config = embassy_stm32::Config::default();
     config.rcc.mux = embassy_stm32::rcc::ClockSrc::HSI16;
     config.rcc.enable_hsi48 = true;
-    config
-}
+    let p = embassy_stm32::init(config);
 
-#[embassy_executor::main(config = "config()")]
-async fn main(_spawner: embassy_executor::executor::Spawner, p: Peripherals) {
     // SPI for sx127x
     let spi = spi::Spi::new(
         p.SPI1,
@@ -48,7 +46,7 @@ async fn main(_spawner: embassy_executor::executor::Spawner, p: Peripherals) {
     let radio = Sx127xRadio::new(spi, cs, reset, ready_pin, DummySwitch).await.unwrap();
 
     let region = region::EU868::default().into();
-    let mut device: Device<_, Crypto, _, _> = Device::new(region, radio, LoraTimer, Rng::new(p.RNG));
+    let mut device: Device<_, Crypto, _, _> = Device::new(region, radio, LoraTimer::new(), Rng::new(p.RNG));
 
     defmt::info!("Joining LoRaWAN network");
 

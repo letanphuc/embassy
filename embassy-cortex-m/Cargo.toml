@@ -2,6 +2,7 @@
 name = "embassy-cortex-m"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [package.metadata.embassy_docs]
 src_base = "https://github.com/embassy-rs/embassy/blob/embassy-cortex-m-v$VERSION/embassy-cortex-m/src/"
@@ -35,12 +36,12 @@ prio-bits-8 = []
 defmt = { version = "0.3", optional = true }
 log = { version = "0.4.14", optional = true }
 
-embassy-util = { version = "0.1.0", path = "../embassy-util" }
+embassy-sync = { version = "0.1.0", path = "../embassy-sync" }
 embassy-executor = { version = "0.1.0", path = "../embassy-executor"}
 embassy-macros = { version = "0.1.0", path = "../embassy-macros"}
 embassy-hal-common = { version = "0.1.0", path = "../embassy-hal-common"}
-atomic-polyfill = "0.1.5"
-critical-section = "0.2.5"
+atomic-polyfill = "1.0.1"
+critical-section = "1.1"
 cfg-if = "1.0.0"
-cortex-m = "0.7.3"
+cortex-m = "0.7.6"
 

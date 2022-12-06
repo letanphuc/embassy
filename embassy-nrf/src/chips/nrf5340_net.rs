@@ -238,7 +238,9 @@ embassy_hal_common::peripherals! {
 
 impl_uarte!(UARTETWISPI0, UARTE0, SERIAL0);
 impl_spim!(UARTETWISPI0, SPIM0, SERIAL0);
+impl_spis!(UARTETWISPI0, SPIS0, SERIAL0);
 impl_twim!(UARTETWISPI0, TWIM0, SERIAL0);
+impl_twis!(UARTETWISPI0, TWIS0, SERIAL0);
 
 impl_timer!(TIMER0, TIMER0, TIMER0);
 impl_timer!(TIMER1, TIMER1, TIMER1);
@@ -328,7 +330,7 @@ impl_ppi_channel!(PPI_CH30, 30 => configurable);
 impl_ppi_channel!(PPI_CH31, 31 => configurable);
 
 pub mod irqs {
-    use embassy_macros::cortex_m_interrupt_declare as declare;
+    use embassy_cortex_m::interrupt::_export::declare;
 
     use crate::pac::Interrupt as InterruptEnum;
 

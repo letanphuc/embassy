@@ -81,7 +81,7 @@ pub use value_error::ValueError;
 use crate::dma::NoDma;
 use crate::peripherals::SUBGHZSPI;
 use crate::rcc::sealed::RccPeripheral;
-use crate::spi::{BitOrder, Config as SpiConfig, MisoPin, MosiPin, SckPin, Spi, MODE_0};
+use crate::spi::{BitOrder, Config as SpiConfig, Spi, MODE_0};
 use crate::time::Hertz;
 use crate::{pac, Peripheral};
 
@@ -212,9 +212,6 @@ impl<'d, Tx, Rx> SubGhz<'d, Tx, Rx> {
     /// clock.
     pub fn new(
         peri: impl Peripheral<P = SUBGHZSPI> + 'd,
-        sck: impl Peripheral<P = impl SckPin<SUBGHZSPI>> + 'd,
-        mosi: impl Peripheral<P = impl MosiPin<SUBGHZSPI>> + 'd,
-        miso: impl Peripheral<P = impl MisoPin<SUBGHZSPI>> + 'd,
         txdma: impl Peripheral<P = Tx> + 'd,
         rxdma: impl Peripheral<P = Rx> + 'd,
     ) -> Self {
@@ -227,7 +224,7 @@ impl<'d, Tx, Rx> SubGhz<'d, Tx, Rx> {
         let mut config = SpiConfig::default();
         config.mode = MODE_0;
         config.bit_order = BitOrder::MsbFirst;
-        let spi = Spi::new(peri, sck, mosi, miso, txdma, rxdma, clk, config);
+        let spi = Spi::new_internal(peri, txdma, rxdma, clk, config);
 
         unsafe { wakeup() };
 
@@ -504,7 +501,7 @@ impl<'d> SubGhz<'d, NoDma, NoDma> {
     ///
     /// sg.set_standby(StandbyClk::Rc)?;
     /// unsafe { sg.set_sleep(SleepCfg::default())? };
-    /// embassy_executor::time::Timer::after(embassy_executor::time::Duration::from_micros(500)).await;
+    /// embassy_time::Timer::after(embassy_time::Duration::from_micros(500)).await;
     /// unsafe { wakeup() };
     /// # Ok::<(), embassy_stm32::subghz::Error>(())
     /// ```

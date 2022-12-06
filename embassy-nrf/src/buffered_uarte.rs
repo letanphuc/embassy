@@ -13,20 +13,20 @@
 //!
 //! Please also see [crate::uarte] to understand when [BufferedUarte] should be used.
 
+use core::cell::RefCell;
 use core::cmp::min;
-use core::future::Future;
+use core::future::poll_fn;
 use core::sync::atomic::{compiler_fence, Ordering};
 use core::task::Poll;
 
 use embassy_cortex_m::peripheral::{PeripheralMutex, PeripheralState, StateStorage};
 use embassy_hal_common::ring_buffer::RingBuffer;
 use embassy_hal_common::{into_ref, PeripheralRef};
-use embassy_util::waitqueue::WakerRegistration;
-use futures::future::poll_fn;
+use embassy_sync::waitqueue::WakerRegistration;
 // Re-export SVD variants to allow user to directly set values
 pub use pac::uarte0::{baudrate::BAUDRATE_A as Baudrate, config::PARITY_A as Parity};
 
-use crate::gpio::Pin as GpioPin;
+use crate::gpio::{self, Pin as GpioPin};
 use crate::interrupt::InterruptExt;
 use crate::ppi::{AnyConfigurableChannel, ConfigurableChannel, Event, Ppi, Task};
 use crate::timer::{Frequency, Instance as TimerInstance, Timer};
@@ -45,8 +45,10 @@ enum TxState {
     Transmitting(usize),
 }
 
+/// A type for storing the state of the UARTE peripheral that can be stored in a static.
 pub struct State<'d, U: UarteInstance, T: TimerInstance>(StateStorage<StateInner<'d, U, T>>);
 impl<'d, U: UarteInstance, T: TimerInstance> State<'d, U, T> {
+    /// Create an instance for storing UARTE peripheral state.
     pub fn new() -> Self {
         Self(StateStorage::new())
     }
@@ -69,12 +71,18 @@ struct StateInner<'d, U: UarteInstance, T: TimerInstance> {
 
 /// Interface to a UARTE instance
 pub struct BufferedUarte<'d, U: UarteInstance, T: TimerInstance> {
-    inner: PeripheralMutex<'d, StateInner<'d, U, T>>,
+    inner: RefCell<PeripheralMutex<'d, StateInner<'d, U, T>>>,
 }
 
 impl<'d, U: UarteInstance, T: TimerInstance> Unpin for BufferedUarte<'d, U, T> {}
 
 impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarte<'d, U, T> {
+    /// Create a new instance of a BufferedUarte.
+    ///
+    /// See the [module documentation](crate::buffered_uarte) for more details about the intended use.
+    ///
+    /// The BufferedUarte uses the provided state to store the buffers and peripheral state. The timer and ppi channels are used to 'emulate' idle line detection so that read operations
+    /// can return early if there is no data to receive.
     pub fn new(
         state: &'d mut State<'d, U, T>,
         peri: impl Peripheral<P = U> + 'd,
@@ -161,7 +169,7 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarte<'d, U, T> {
         ppi_ch2.enable();
 
         Self {
-            inner: PeripheralMutex::new(irq, &mut state.0, move || StateInner {
+            inner: RefCell::new(PeripheralMutex::new(irq, &mut state.0, move || StateInner {
                 _peri: peri,
                 timer,
                 _ppi_ch1: ppi_ch1,
@@ -174,12 +182,13 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarte<'d, U, T> {
                 tx: RingBuffer::new(tx_buffer),
                 tx_state: TxState::Idle,
                 tx_waker: WakerRegistration::new(),
-            }),
+            })),
         }
     }
 
+    /// Adjust the baud rate to the provided value.
     pub fn set_baudrate(&mut self, baudrate: Baudrate) {
-        self.inner.with(|state| {
+        self.inner.borrow_mut().with(|state| {
             let r = U::regs();
 
             let timeout = 0x8000_0000 / (baudrate as u32 / 40);
@@ -189,21 +198,16 @@ impl<'d, U: UarteInstance, T: TimerInstance> BufferedUarte<'d, U, T> {
             r.baudrate.write(|w| w.baudrate().variant(baudrate));
         });
     }
-}
 
-impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::Io for BufferedUarte<'d, U, T> {
-    type Error = core::convert::Infallible;
-}
+    pub fn split<'u>(&'u mut self) -> (BufferedUarteRx<'u, 'd, U, T>, BufferedUarteTx<'u, 'd, U, T>) {
+        (BufferedUarteRx { inner: self }, BufferedUarteTx { inner: self })
+    }
 
-impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Read for BufferedUarte<'d, U, T> {
-    type ReadFuture<'a> = impl Future<Output = Result<usize, Self::Error>>
-    where
-        Self: 'a;
-
-    fn read<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
+    async fn inner_read<'a>(&'a self, buf: &'a mut [u8]) -> Result<usize, core::convert::Infallible> {
         poll_fn(move |cx| {
             let mut do_pend = false;
-            let res = self.inner.with(|state| {
+            let mut inner = self.inner.borrow_mut();
+            let res = inner.with(|state| {
                 compiler_fence(Ordering::SeqCst);
                 trace!("poll_read");
 
@@ -223,62 +227,18 @@ impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Read for Buffe
                 Poll::Pending
             });
             if do_pend {
-                self.inner.pend();
+                inner.pend();
             }
 
             res
         })
+        .await
     }
-}
 
-impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::BufRead for BufferedUarte<'d, U, T> {
-    type FillBufFuture<'a> = impl Future<Output = Result<&'a [u8], Self::Error>>
-    where
-        Self: 'a;
-
-    fn fill_buf<'a>(&'a mut self) -> Self::FillBufFuture<'a> {
+    async fn inner_write<'a>(&'a self, buf: &'a [u8]) -> Result<usize, core::convert::Infallible> {
         poll_fn(move |cx| {
-            self.inner.with(|state| {
-                compiler_fence(Ordering::SeqCst);
-                trace!("fill_buf");
-
-                // We have data ready in buffer? Return it.
-                let buf = state.rx.pop_buf();
-                if !buf.is_empty() {
-                    trace!("  got {:?} {:?}", buf.as_ptr() as u32, buf.len());
-                    let buf: &[u8] = buf;
-                    // Safety: buffer lives as long as uart
-                    let buf: &[u8] = unsafe { core::mem::transmute(buf) };
-                    return Poll::Ready(Ok(buf));
-                }
-
-                trace!("  empty");
-                state.rx_waker.register(cx.waker());
-                Poll::<Result<&[u8], Self::Error>>::Pending
-            })
-        })
-    }
-
-    fn consume(&mut self, amt: usize) {
-        let signal = self.inner.with(|state| {
-            let full = state.rx.is_full();
-            state.rx.pop(amt);
-            full
-        });
-        if signal {
-            self.inner.pend();
-        }
-    }
-}
-
-impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Write for BufferedUarte<'d, U, T> {
-    type WriteFuture<'a> = impl Future<Output = Result<usize, Self::Error>>
-    where
-        Self: 'a;
-
-    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteFuture<'a> {
-        poll_fn(move |cx| {
-            let res = self.inner.with(|state| {
+            let mut inner = self.inner.borrow_mut();
+            let res = inner.with(|state| {
                 trace!("poll_write: {:?}", buf.len());
 
                 let tx_buf = state.tx.push_buf();
@@ -299,19 +259,16 @@ impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Write for Buff
                 Poll::Ready(Ok(n))
             });
 
-            self.inner.pend();
+            inner.pend();
 
             res
         })
+        .await
     }
 
-    type FlushFuture<'a> = impl Future<Output = Result<(), Self::Error>>
-    where
-        Self: 'a;
-
-    fn flush<'a>(&'a mut self) -> Self::FlushFuture<'a> {
+    async fn inner_flush<'a>(&'a self) -> Result<(), core::convert::Infallible> {
         poll_fn(move |cx| {
-            self.inner.with(|state| {
+            self.inner.borrow_mut().with(|state| {
                 trace!("poll_flush");
 
                 if !state.tx.is_empty() {
@@ -323,6 +280,115 @@ impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Write for Buff
                 Poll::Ready(Ok(()))
             })
         })
+        .await
+    }
+
+    async fn inner_fill_buf<'a>(&'a self) -> Result<&'a [u8], core::convert::Infallible> {
+        poll_fn(move |cx| {
+            self.inner.borrow_mut().with(|state| {
+                compiler_fence(Ordering::SeqCst);
+                trace!("fill_buf");
+
+                // We have data ready in buffer? Return it.
+                let buf = state.rx.pop_buf();
+                if !buf.is_empty() {
+                    trace!("  got {:?} {:?}", buf.as_ptr() as u32, buf.len());
+                    let buf: &[u8] = buf;
+                    // Safety: buffer lives as long as uart
+                    let buf: &[u8] = unsafe { core::mem::transmute(buf) };
+                    return Poll::Ready(Ok(buf));
+                }
+
+                trace!("  empty");
+                state.rx_waker.register(cx.waker());
+                Poll::<Result<&[u8], core::convert::Infallible>>::Pending
+            })
+        })
+        .await
+    }
+
+    fn inner_consume(&self, amt: usize) {
+        let mut inner = self.inner.borrow_mut();
+        let signal = inner.with(|state| {
+            let full = state.rx.is_full();
+            state.rx.pop(amt);
+            full
+        });
+        if signal {
+            inner.pend();
+        }
+    }
+}
+
+pub struct BufferedUarteTx<'u, 'd, U: UarteInstance, T: TimerInstance> {
+    inner: &'u BufferedUarte<'d, U, T>,
+}
+
+pub struct BufferedUarteRx<'u, 'd, U: UarteInstance, T: TimerInstance> {
+    inner: &'u BufferedUarte<'d, U, T>,
+}
+
+impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::Io for BufferedUarte<'d, U, T> {
+    type Error = core::convert::Infallible;
+}
+
+impl<'u, 'd, U: UarteInstance, T: TimerInstance> embedded_io::Io for BufferedUarteRx<'u, 'd, U, T> {
+    type Error = core::convert::Infallible;
+}
+
+impl<'u, 'd, U: UarteInstance, T: TimerInstance> embedded_io::Io for BufferedUarteTx<'u, 'd, U, T> {
+    type Error = core::convert::Infallible;
+}
+
+impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Read for BufferedUarte<'d, U, T> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.inner_read(buf).await
+    }
+}
+
+impl<'u, 'd: 'u, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Read for BufferedUarteRx<'u, 'd, U, T> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.inner.inner_read(buf).await
+    }
+}
+
+impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::BufRead for BufferedUarte<'d, U, T> {
+    async fn fill_buf(&mut self) -> Result<&[u8], Self::Error> {
+        self.inner_fill_buf().await
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.inner_consume(amt)
+    }
+}
+
+impl<'u, 'd: 'u, U: UarteInstance, T: TimerInstance> embedded_io::asynch::BufRead for BufferedUarteRx<'u, 'd, U, T> {
+    async fn fill_buf(&mut self) -> Result<&[u8], Self::Error> {
+        self.inner.inner_fill_buf().await
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.inner.inner_consume(amt)
+    }
+}
+
+impl<'d, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Write for BufferedUarte<'d, U, T> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.inner_write(buf).await
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.inner_flush().await
+    }
+}
+
+impl<'u, 'd: 'u, U: UarteInstance, T: TimerInstance> embedded_io::asynch::Write for BufferedUarteTx<'u, 'd, U, T> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.inner.inner_write(buf).await
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.inner.inner_flush().await
     }
 }
 
@@ -330,21 +396,23 @@ impl<'a, U: UarteInstance, T: TimerInstance> Drop for StateInner<'a, U, T> {
     fn drop(&mut self) {
         let r = U::regs();
 
-        // TODO this probably deadlocks. do like Uarte instead.
-
         self.timer.stop();
-        if let RxState::Receiving = self.rx_state {
-            r.tasks_stoprx.write(|w| unsafe { w.bits(1) });
-        }
-        if let TxState::Transmitting(_) = self.tx_state {
-            r.tasks_stoptx.write(|w| unsafe { w.bits(1) });
-        }
-        if let RxState::Receiving = self.rx_state {
-            low_power_wait_until(|| r.events_endrx.read().bits() == 1);
-        }
-        if let TxState::Transmitting(_) = self.tx_state {
-            low_power_wait_until(|| r.events_endtx.read().bits() == 1);
-        }
+
+        r.inten.reset();
+        r.events_rxto.reset();
+        r.tasks_stoprx.write(|w| unsafe { w.bits(1) });
+        r.events_txstopped.reset();
+        r.tasks_stoptx.write(|w| unsafe { w.bits(1) });
+
+        while r.events_txstopped.read().bits() == 0 {}
+        while r.events_rxto.read().bits() == 0 {}
+
+        r.enable.write(|w| w.enable().disabled());
+
+        gpio::deconfigure_pin(r.psel.rxd.read().bits());
+        gpio::deconfigure_pin(r.psel.txd.read().bits());
+        gpio::deconfigure_pin(r.psel.rts.read().bits());
+        gpio::deconfigure_pin(r.psel.cts.read().bits());
     }
 }
 
@@ -449,14 +517,4 @@ impl<'a, U: UarteInstance, T: TimerInstance> PeripheralState for StateInner<'a, 
         }
         trace!("irq: end");
     }
-}
-
-/// Low power blocking wait loop using WFE/SEV.
-fn low_power_wait_until(mut condition: impl FnMut() -> bool) {
-    while !condition() {
-        // WFE might "eat" an event that would have otherwise woken the executor.
-        cortex_m::asm::wfe();
-    }
-    // Retrigger an event to be transparent to the executor.
-    cortex_m::asm::sev();
 }

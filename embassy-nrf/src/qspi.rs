@@ -1,11 +1,11 @@
 #![macro_use]
 
+use core::future::poll_fn;
 use core::ptr;
 use core::task::Poll;
 
 use embassy_hal_common::drop::DropBomb;
 use embassy_hal_common::{into_ref, PeripheralRef};
-use futures::future::poll_fn;
 
 use crate::gpio::{self, Pin as GpioPin};
 use crate::interrupt::{Interrupt, InterruptExt};
@@ -526,7 +526,7 @@ cfg_if::cfg_if! {
 }
 
 pub(crate) mod sealed {
-    use embassy_util::waitqueue::AtomicWaker;
+    use embassy_sync::waitqueue::AtomicWaker;
 
     use super::*;
 

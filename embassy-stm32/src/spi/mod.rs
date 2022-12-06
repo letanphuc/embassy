@@ -3,12 +3,12 @@
 use core::ptr;
 
 use embassy_embedded_hal::SetConfig;
+use embassy_futures::join::join;
 use embassy_hal_common::{into_ref, PeripheralRef};
 pub use embedded_hal_02::spi::{Mode, Phase, Polarity, MODE_0, MODE_1, MODE_2, MODE_3};
-use futures::future::join;
 
 use self::sealed::WordSize;
-use crate::dma::{slice_ptr_parts, NoDma, Transfer};
+use crate::dma::{slice_ptr_parts, Transfer};
 use crate::gpio::sealed::{AFType, Pin as _};
 use crate::gpio::AnyPin;
 use crate::pac::spi::{regs, vals, Spi as Regs};
@@ -177,6 +177,19 @@ impl<'d, T: Instance, Tx, Rx> Spi<'d, T, Tx, Rx> {
             freq,
             config,
         )
+    }
+
+    /// Useful for on chip peripherals like SUBGHZ which are hardwired.
+    /// The bus can optionally be exposed externally with `Spi::new()` still.
+    #[allow(dead_code)]
+    pub(crate) fn new_internal(
+        peri: impl Peripheral<P = T> + 'd,
+        txdma: impl Peripheral<P = Tx> + 'd,
+        rxdma: impl Peripheral<P = Rx> + 'd,
+        freq: Hertz,
+        config: Config,
+    ) -> Self {
+        Self::new_inner(peri, None, None, None, txdma, rxdma, freq, config)
     }
 
     fn new_inner(
@@ -799,7 +812,7 @@ mod eh02 {
     // some marker traits. For details, see https://github.com/rust-embedded/embedded-hal/pull/289
     macro_rules! impl_blocking {
         ($w:ident) => {
-            impl<'d, T: Instance> embedded_hal_02::blocking::spi::Write<$w> for Spi<'d, T, NoDma, NoDma> {
+            impl<'d, T: Instance, Tx, Rx> embedded_hal_02::blocking::spi::Write<$w> for Spi<'d, T, Tx, Rx> {
                 type Error = Error;
 
                 fn write(&mut self, words: &[$w]) -> Result<(), Self::Error> {
@@ -807,7 +820,7 @@ mod eh02 {
                 }
             }
 
-            impl<'d, T: Instance> embedded_hal_02::blocking::spi::Transfer<$w> for Spi<'d, T, NoDma, NoDma> {
+            impl<'d, T: Instance, Tx, Rx> embedded_hal_02::blocking::spi::Transfer<$w> for Spi<'d, T, Tx, Rx> {
                 type Error = Error;
 
                 fn transfer<'w>(&mut self, words: &'w mut [$w]) -> Result<&'w [$w], Self::Error> {
@@ -830,25 +843,25 @@ mod eh1 {
         type Error = Error;
     }
 
-    impl<'d, T: Instance, Tx, Rx> embedded_hal_1::spi::blocking::SpiBusFlush for Spi<'d, T, Tx, Rx> {
+    impl<'d, T: Instance, Tx, Rx> embedded_hal_1::spi::SpiBusFlush for Spi<'d, T, Tx, Rx> {
         fn flush(&mut self) -> Result<(), Self::Error> {
             Ok(())
         }
     }
 
-    impl<'d, T: Instance, W: Word> embedded_hal_1::spi::blocking::SpiBusRead<W> for Spi<'d, T, NoDma, NoDma> {
+    impl<'d, T: Instance, W: Word, Tx, Rx> embedded_hal_1::spi::SpiBusRead<W> for Spi<'d, T, Tx, Rx> {
         fn read(&mut self, words: &mut [W]) -> Result<(), Self::Error> {
             self.blocking_read(words)
         }
     }
 
-    impl<'d, T: Instance, W: Word> embedded_hal_1::spi::blocking::SpiBusWrite<W> for Spi<'d, T, NoDma, NoDma> {
+    impl<'d, T: Instance, W: Word, Tx, Rx> embedded_hal_1::spi::SpiBusWrite<W> for Spi<'d, T, Tx, Rx> {
         fn write(&mut self, words: &[W]) -> Result<(), Self::Error> {
             self.blocking_write(words)
         }
     }
 
-    impl<'d, T: Instance, W: Word> embedded_hal_1::spi::blocking::SpiBus<W> for Spi<'d, T, NoDma, NoDma> {
+    impl<'d, T: Instance, W: Word, Tx, Rx> embedded_hal_1::spi::SpiBus<W> for Spi<'d, T, Tx, Rx> {
         fn transfer(&mut self, read: &mut [W], write: &[W]) -> Result<(), Self::Error> {
             self.blocking_transfer(read, write)
         }
@@ -870,54 +883,36 @@ mod eh1 {
     }
 }
 
-cfg_if::cfg_if! {
-    if #[cfg(all(feature = "unstable-traits", feature = "nightly"))] {
-        use core::future::Future;
-        impl<'d, T: Instance, Tx, Rx> embedded_hal_async::spi::SpiBusFlush for Spi<'d, T, Tx, Rx> {
-            type FlushFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
+#[cfg(all(feature = "unstable-traits", feature = "nightly"))]
+mod eha {
+    use super::*;
+    impl<'d, T: Instance, Tx, Rx> embedded_hal_async::spi::SpiBusFlush for Spi<'d, T, Tx, Rx> {
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
 
-            fn flush<'a>(&'a mut self) -> Self::FlushFuture<'a> {
-                async { Ok(()) }
-            }
+    impl<'d, T: Instance, Tx: TxDma<T>, Rx, W: Word> embedded_hal_async::spi::SpiBusWrite<W> for Spi<'d, T, Tx, Rx> {
+        async fn write(&mut self, words: &[W]) -> Result<(), Self::Error> {
+            self.write(words).await
+        }
+    }
+
+    impl<'d, T: Instance, Tx: TxDma<T>, Rx: RxDma<T>, W: Word> embedded_hal_async::spi::SpiBusRead<W>
+        for Spi<'d, T, Tx, Rx>
+    {
+        async fn read(&mut self, words: &mut [W]) -> Result<(), Self::Error> {
+            self.read(words).await
+        }
+    }
+
+    impl<'d, T: Instance, Tx: TxDma<T>, Rx: RxDma<T>, W: Word> embedded_hal_async::spi::SpiBus<W> for Spi<'d, T, Tx, Rx> {
+        async fn transfer<'a>(&'a mut self, read: &'a mut [W], write: &'a [W]) -> Result<(), Self::Error> {
+            self.transfer(read, write).await
         }
 
-        impl<'d, T: Instance, Tx: TxDma<T>, Rx, W: Word> embedded_hal_async::spi::SpiBusWrite<W>
-            for Spi<'d, T, Tx, Rx>
-        {
-            type WriteFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-
-            fn write<'a>(&'a mut self, data: &'a [W]) -> Self::WriteFuture<'a> {
-                self.write(data)
-            }
-        }
-
-        impl<'d, T: Instance, Tx: TxDma<T>, Rx: RxDma<T>, W: Word> embedded_hal_async::spi::SpiBusRead<W>
-            for Spi<'d, T, Tx, Rx>
-        {
-            type ReadFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-
-            fn read<'a>(&'a mut self, data: &'a mut [W]) -> Self::ReadFuture<'a> {
-                self.read(data)
-            }
-        }
-
-        impl<'d, T: Instance, Tx: TxDma<T>, Rx: RxDma<T>, W: Word> embedded_hal_async::spi::SpiBus<W>
-            for Spi<'d, T, Tx, Rx>
-        {
-            type TransferFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-
-            fn transfer<'a>(&'a mut self, rx: &'a mut [W], tx: &'a [W]) -> Self::TransferFuture<'a> {
-                self.transfer(rx, tx)
-            }
-
-            type TransferInPlaceFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-
-            fn transfer_in_place<'a>(
-                &'a mut self,
-                words: &'a mut [W],
-            ) -> Self::TransferInPlaceFuture<'a> {
-                self.transfer_in_place(words)
-            }
+        async fn transfer_in_place<'a>(&'a mut self, words: &'a mut [W]) -> Result<(), Self::Error> {
+            self.transfer_in_place(words).await
         }
     }
 }

@@ -1,24 +1,35 @@
 #![no_std]
-#![cfg_attr(feature = "nightly", feature(generic_associated_types, type_alias_impl_trait))]
+#![cfg_attr(feature = "nightly", feature(async_fn_in_trait, impl_trait_projections))]
+#![cfg_attr(feature = "nightly", allow(incomplete_features))]
 
 // This mod MUST go first, so that the others see its macros.
 pub(crate) mod fmt;
 
+mod intrinsics;
+
+pub mod adc;
 pub mod dma;
 pub mod gpio;
+pub mod i2c;
 pub mod interrupt;
+pub mod rom_data;
+pub mod rtc;
 pub mod spi;
+#[cfg(feature = "time-driver")]
 pub mod timer;
 pub mod uart;
+#[cfg(feature = "nightly")]
+pub mod usb;
 
-mod clocks;
+pub mod clocks;
+pub mod flash;
 mod reset;
 
 // Reexports
 
 pub use embassy_cortex_m::executor;
+pub use embassy_cortex_m::interrupt::_export::interrupt;
 pub use embassy_hal_common::{into_ref, Peripheral, PeripheralRef};
-pub use embassy_macros::cortex_m_interrupt as interrupt;
 #[cfg(feature = "unstable-pac")]
 pub use rp2040_pac2 as pac;
 #[cfg(not(feature = "unstable-pac"))]
@@ -68,6 +79,9 @@ embassy_hal_common::peripherals! {
     SPI0,
     SPI1,
 
+    I2C0,
+    I2C1,
+
     DMA_CH0,
     DMA_CH1,
     DMA_CH2,
@@ -80,6 +94,14 @@ embassy_hal_common::peripherals! {
     DMA_CH9,
     DMA_CH10,
     DMA_CH11,
+
+    USB,
+
+    RTC,
+
+    FLASH,
+
+    ADC,
 }
 
 #[link_section = ".boot2"]
@@ -104,8 +126,43 @@ pub fn init(_config: config::Config) -> Peripherals {
 
     unsafe {
         clocks::init();
+        #[cfg(feature = "time-driver")]
         timer::init();
+        dma::init();
     }
 
     peripherals
+}
+
+/// Extension trait for PAC regs, adding atomic xor/bitset/bitclear writes.
+trait RegExt<T: Copy> {
+    unsafe fn write_xor<R>(&self, f: impl FnOnce(&mut T) -> R) -> R;
+    unsafe fn write_set<R>(&self, f: impl FnOnce(&mut T) -> R) -> R;
+    unsafe fn write_clear<R>(&self, f: impl FnOnce(&mut T) -> R) -> R;
+}
+
+impl<T: Default + Copy, A: pac::common::Write> RegExt<T> for pac::common::Reg<T, A> {
+    unsafe fn write_xor<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut val = Default::default();
+        let res = f(&mut val);
+        let ptr = (self.ptr() as *mut u8).add(0x1000) as *mut T;
+        ptr.write_volatile(val);
+        res
+    }
+
+    unsafe fn write_set<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut val = Default::default();
+        let res = f(&mut val);
+        let ptr = (self.ptr() as *mut u8).add(0x2000) as *mut T;
+        ptr.write_volatile(val);
+        res
+    }
+
+    unsafe fn write_clear<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut val = Default::default();
+        let res = f(&mut val);
+        let ptr = (self.ptr() as *mut u8).add(0x3000) as *mut T;
+        ptr.write_volatile(val);
+        res
+    }
 }

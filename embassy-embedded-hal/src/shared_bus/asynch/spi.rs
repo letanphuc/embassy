@@ -4,16 +4,16 @@
 //!
 //! ```rust
 //! use embassy_embedded_hal::shared_bus::spi::SpiDevice;
-//! use embassy_util::mutex::Mutex;
-//! use embassy_util::blocking_mutex::raw::ThreadModeRawMutex;
+//! use embassy_sync::mutex::Mutex;
+//! use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 //!
-//! static SPI_BUS: Forever<Mutex<ThreadModeRawMutex, spim::Spim<SPI3>>> = Forever::new();
+//! static SPI_BUS: StaticCell<Mutex<ThreadModeRawMutex, spim::Spim<SPI3>>> = StaticCell::new();
 //! let mut config = spim::Config::default();
 //! config.frequency = spim::Frequency::M32;
 //! let irq = interrupt::take!(SPIM3);
 //! let spi = spim::Spim::new_txonly(p.SPI3, irq, p.P0_15, p.P0_18, config);
 //! let spi_bus = Mutex::<ThreadModeRawMutex, _>::new(spi);
-//! let spi_bus = SPI_BUS.put(spi_bus);
+//! let spi_bus = SPI_BUS.init(spi_bus);
 //!
 //! // Device 1, using embedded-hal-async compatible driver for ST7735 LCD display
 //! let cs_pin1 = Output::new(p.P0_24, Level::Low, OutputDrive::Standard);
@@ -27,9 +27,9 @@
 //! ```
 use core::future::Future;
 
-use embassy_util::blocking_mutex::raw::RawMutex;
-use embassy_util::mutex::Mutex;
-use embedded_hal_1::digital::blocking::OutputPin;
+use embassy_sync::blocking_mutex::raw::RawMutex;
+use embassy_sync::mutex::Mutex;
+use embedded_hal_1::digital::OutputPin;
 use embedded_hal_1::spi::ErrorType;
 use embedded_hal_async::spi;
 
@@ -57,7 +57,7 @@ where
     type Error = SpiDeviceError<BUS::Error, CS::Error>;
 }
 
-impl<M, BUS, CS> spi::SpiDevice for SpiDevice<'_, M, BUS, CS>
+unsafe impl<M, BUS, CS> spi::SpiDevice for SpiDevice<'_, M, BUS, CS>
 where
     M: RawMutex + 'static,
     BUS: spi::SpiBusFlush + 'static,
@@ -65,33 +65,25 @@ where
 {
     type Bus = BUS;
 
-    type TransactionFuture<'a, R, F, Fut> = impl Future<Output = Result<R, Self::Error>> + 'a
+    async fn transaction<R, F, Fut>(&mut self, f: F) -> Result<R, Self::Error>
     where
-        Self: 'a, R: 'a, F: FnOnce(*mut Self::Bus) -> Fut + 'a,
-        Fut: Future<Output =  Result<R, <Self::Bus as ErrorType>::Error>> + 'a;
-
-    fn transaction<'a, R, F, Fut>(&'a mut self, f: F) -> Self::TransactionFuture<'a, R, F, Fut>
-    where
-        R: 'a,
-        F: FnOnce(*mut Self::Bus) -> Fut + 'a,
-        Fut: Future<Output = Result<R, <Self::Bus as ErrorType>::Error>> + 'a,
+        F: FnOnce(*mut Self::Bus) -> Fut,
+        Fut: Future<Output = Result<R, <Self::Bus as ErrorType>::Error>>,
     {
-        async move {
-            let mut bus = self.bus.lock().await;
-            self.cs.set_low().map_err(SpiDeviceError::Cs)?;
+        let mut bus = self.bus.lock().await;
+        self.cs.set_low().map_err(SpiDeviceError::Cs)?;
 
-            let f_res = f(&mut *bus).await;
+        let f_res = f(&mut *bus).await;
 
-            // On failure, it's important to still flush and deassert CS.
-            let flush_res = bus.flush().await;
-            let cs_res = self.cs.set_high();
+        // On failure, it's important to still flush and deassert CS.
+        let flush_res = bus.flush().await;
+        let cs_res = self.cs.set_high();
 
-            let f_res = f_res.map_err(SpiDeviceError::Spi)?;
-            flush_res.map_err(SpiDeviceError::Spi)?;
-            cs_res.map_err(SpiDeviceError::Cs)?;
+        let f_res = f_res.map_err(SpiDeviceError::Spi)?;
+        flush_res.map_err(SpiDeviceError::Spi)?;
+        cs_res.map_err(SpiDeviceError::Cs)?;
 
-            Ok(f_res)
-        }
+        Ok(f_res)
     }
 }
 
@@ -122,7 +114,7 @@ where
     type Error = SpiDeviceError<BUS::Error, CS::Error>;
 }
 
-impl<M, BUS, CS> spi::SpiDevice for SpiDeviceWithConfig<'_, M, BUS, CS>
+unsafe impl<M, BUS, CS> spi::SpiDevice for SpiDeviceWithConfig<'_, M, BUS, CS>
 where
     M: RawMutex + 'static,
     BUS: spi::SpiBusFlush + SetConfig + 'static,
@@ -130,33 +122,25 @@ where
 {
     type Bus = BUS;
 
-    type TransactionFuture<'a, R, F, Fut> = impl Future<Output = Result<R, Self::Error>> + 'a
+    async fn transaction<R, F, Fut>(&mut self, f: F) -> Result<R, Self::Error>
     where
-        Self: 'a, R: 'a, F: FnOnce(*mut Self::Bus) -> Fut + 'a,
-        Fut: Future<Output =  Result<R, <Self::Bus as ErrorType>::Error>> + 'a;
-
-    fn transaction<'a, R, F, Fut>(&'a mut self, f: F) -> Self::TransactionFuture<'a, R, F, Fut>
-    where
-        R: 'a,
-        F: FnOnce(*mut Self::Bus) -> Fut + 'a,
-        Fut: Future<Output = Result<R, <Self::Bus as ErrorType>::Error>> + 'a,
+        F: FnOnce(*mut Self::Bus) -> Fut,
+        Fut: Future<Output = Result<R, <Self::Bus as ErrorType>::Error>>,
     {
-        async move {
-            let mut bus = self.bus.lock().await;
-            bus.set_config(&self.config);
-            self.cs.set_low().map_err(SpiDeviceError::Cs)?;
+        let mut bus = self.bus.lock().await;
+        bus.set_config(&self.config);
+        self.cs.set_low().map_err(SpiDeviceError::Cs)?;
 
-            let f_res = f(&mut *bus).await;
+        let f_res = f(&mut *bus).await;
 
-            // On failure, it's important to still flush and deassert CS.
-            let flush_res = bus.flush().await;
-            let cs_res = self.cs.set_high();
+        // On failure, it's important to still flush and deassert CS.
+        let flush_res = bus.flush().await;
+        let cs_res = self.cs.set_high();
 
-            let f_res = f_res.map_err(SpiDeviceError::Spi)?;
-            flush_res.map_err(SpiDeviceError::Spi)?;
-            cs_res.map_err(SpiDeviceError::Cs)?;
+        let f_res = f_res.map_err(SpiDeviceError::Spi)?;
+        flush_res.map_err(SpiDeviceError::Spi)?;
+        cs_res.map_err(SpiDeviceError::Cs)?;
 
-            Ok(f_res)
-        }
+        Ok(f_res)
     }
 }

@@ -5,7 +5,7 @@ use core::task::{Context, Poll};
 
 use embassy_cortex_m::interrupt::{Interrupt, InterruptExt};
 use embassy_hal_common::{impl_peripheral, into_ref, PeripheralRef};
-use embassy_util::waitqueue::AtomicWaker;
+use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::pac::common::{Reg, RW};
 use crate::pac::SIO;
@@ -85,27 +85,27 @@ impl<'d, T: Pin> Input<'d, T> {
     }
 
     #[inline]
-    pub async fn wait_for_high<'a>(&mut self) {
+    pub async fn wait_for_high(&mut self) {
         self.pin.wait_for_high().await;
     }
 
     #[inline]
-    pub async fn wait_for_low<'a>(&mut self) {
+    pub async fn wait_for_low(&mut self) {
         self.pin.wait_for_low().await;
     }
 
     #[inline]
-    pub async fn wait_for_rising_edge<'a>(&mut self) {
+    pub async fn wait_for_rising_edge(&mut self) {
         self.pin.wait_for_rising_edge().await;
     }
 
     #[inline]
-    pub async fn wait_for_falling_edge<'a>(&mut self) {
+    pub async fn wait_for_falling_edge(&mut self) {
         self.pin.wait_for_falling_edge().await;
     }
 
     #[inline]
-    pub async fn wait_for_any_edge<'a>(&mut self) {
+    pub async fn wait_for_any_edge(&mut self) {
         self.pin.wait_for_any_edge().await;
     }
 }
@@ -152,24 +152,26 @@ unsafe fn IO_IRQ_BANK0() {
         let event = (intsx.read().0 >> pin_group * 4) & 0xf as u32;
 
         if let Some(trigger) = InterruptTrigger::from_u32(event) {
-            proc_intx.inte(pin / 8).write(|w| match trigger {
-                InterruptTrigger::AnyEdge => {
-                    w.set_edge_high(pin_group, false);
-                    w.set_edge_low(pin_group, false);
-                }
-                InterruptTrigger::LevelHigh => {
-                    debug!("IO_IRQ_BANK0 pin {} LevelHigh triggered\n", pin);
-                    w.set_level_high(pin_group, false);
-                }
-                InterruptTrigger::LevelLow => {
-                    w.set_level_low(pin_group, false);
-                }
-                InterruptTrigger::EdgeHigh => {
-                    w.set_edge_high(pin_group, false);
-                }
-                InterruptTrigger::EdgeLow => {
-                    w.set_edge_low(pin_group, false);
-                }
+            critical_section::with(|_| {
+                proc_intx.inte(pin / 8).modify(|w| match trigger {
+                    InterruptTrigger::AnyEdge => {
+                        w.set_edge_high(pin_group, false);
+                        w.set_edge_low(pin_group, false);
+                    }
+                    InterruptTrigger::LevelHigh => {
+                        debug!("IO_IRQ_BANK0 pin {} LevelHigh triggered", pin);
+                        w.set_level_high(pin_group, false);
+                    }
+                    InterruptTrigger::LevelLow => {
+                        w.set_level_low(pin_group, false);
+                    }
+                    InterruptTrigger::EdgeHigh => {
+                        w.set_edge_high(pin_group, false);
+                    }
+                    InterruptTrigger::EdgeLow => {
+                        w.set_edge_low(pin_group, false);
+                    }
+                });
             });
             INTERRUPT_WAKERS[pin as usize].wake();
         }
@@ -187,29 +189,31 @@ impl<'d, T: Pin> InputFuture<'d, T> {
         unsafe {
             let irq = interrupt::IO_IRQ_BANK0::steal();
             irq.disable();
-            irq.set_priority(interrupt::Priority::P6);
+            irq.set_priority(interrupt::Priority::P3);
 
             // Each INTR register is divided into 8 groups, one group for each
             // pin, and each group consists of LEVEL_LOW, LEVEL_HIGH, EDGE_LOW,
             // and EGDE_HIGH.
             let pin_group = (pin.pin() % 8) as usize;
-            pin.int_proc().inte((pin.pin() / 8) as usize).write(|w| match level {
-                InterruptTrigger::LevelHigh => {
-                    debug!("InputFuture::new enable LevelHigh for pin {} \n", pin.pin());
-                    w.set_level_high(pin_group, true);
-                }
-                InterruptTrigger::LevelLow => {
-                    w.set_level_low(pin_group, true);
-                }
-                InterruptTrigger::EdgeHigh => {
-                    w.set_edge_high(pin_group, true);
-                }
-                InterruptTrigger::EdgeLow => {
-                    w.set_edge_low(pin_group, true);
-                }
-                InterruptTrigger::AnyEdge => {
-                    // noop
-                }
+            critical_section::with(|_| {
+                pin.int_proc().inte((pin.pin() / 8) as usize).modify(|w| match level {
+                    InterruptTrigger::LevelHigh => {
+                        debug!("InputFuture::new enable LevelHigh for pin {}", pin.pin());
+                        w.set_level_high(pin_group, true);
+                    }
+                    InterruptTrigger::LevelLow => {
+                        w.set_level_low(pin_group, true);
+                    }
+                    InterruptTrigger::EdgeHigh => {
+                        w.set_edge_high(pin_group, true);
+                    }
+                    InterruptTrigger::EdgeLow => {
+                        w.set_edge_low(pin_group, true);
+                    }
+                    InterruptTrigger::AnyEdge => {
+                        // noop
+                    }
+                });
             });
 
             irq.enable();
@@ -241,45 +245,45 @@ impl<'d, T: Pin> Future for InputFuture<'d, T> {
         // the pin and if it has been disabled that means it was done by the
         // interrupt service routine, so we then know that the event/trigger
         // happened and Poll::Ready will be returned.
-        debug!("{:?} for pin {}\n", self.level, self.pin.pin());
+        debug!("{:?} for pin {}", self.level, self.pin.pin());
         match self.level {
             InterruptTrigger::AnyEdge => {
                 if !inte.edge_high(pin_group) && !inte.edge_low(pin_group) {
                     #[rustfmt::skip]
-                    debug!("{:?} for pin {} was cleared, return Poll::Ready\n", self.level, self.pin.pin());
+                    debug!("{:?} for pin {} was cleared, return Poll::Ready", self.level, self.pin.pin());
                     return Poll::Ready(());
                 }
             }
             InterruptTrigger::LevelHigh => {
                 if !inte.level_high(pin_group) {
                     #[rustfmt::skip]
-                    debug!("{:?} for pin {} was cleared, return Poll::Ready\n", self.level, self.pin.pin());
+                    debug!("{:?} for pin {} was cleared, return Poll::Ready", self.level, self.pin.pin());
                     return Poll::Ready(());
                 }
             }
             InterruptTrigger::LevelLow => {
                 if !inte.level_low(pin_group) {
                     #[rustfmt::skip]
-                    debug!("{:?} for pin {} was cleared, return Poll::Ready\n", self.level, self.pin.pin());
+                    debug!("{:?} for pin {} was cleared, return Poll::Ready", self.level, self.pin.pin());
                     return Poll::Ready(());
                 }
             }
             InterruptTrigger::EdgeHigh => {
                 if !inte.edge_high(pin_group) {
                     #[rustfmt::skip]
-                    debug!("{:?} for pin {} was cleared, return Poll::Ready\n", self.level, self.pin.pin());
+                    debug!("{:?} for pin {} was cleared, return Poll::Ready", self.level, self.pin.pin());
                     return Poll::Ready(());
                 }
             }
             InterruptTrigger::EdgeLow => {
                 if !inte.edge_low(pin_group) {
                     #[rustfmt::skip]
-                    debug!("{:?} for pin {} was cleared, return Poll::Ready\n", self.level, self.pin.pin());
+                    debug!("{:?} for pin {} was cleared, return Poll::Ready", self.level, self.pin.pin());
                     return Poll::Ready(());
                 }
             }
         }
-        debug!("InputFuture::poll return Poll::Pending\n");
+        debug!("InputFuture::poll return Poll::Pending");
         Poll::Pending
     }
 }
@@ -429,7 +433,7 @@ impl<'d, T: Pin> Flex<'d, T> {
             });
 
             pin.io().ctrl().write(|w| {
-                w.set_funcsel(pac::io::vals::Gpio0CtrlFuncsel::SIO_0.0);
+                w.set_funcsel(pac::io::vals::Gpio0ctrlFuncsel::SIO_0.0);
             });
         }
 
@@ -545,29 +549,29 @@ impl<'d, T: Pin> Flex<'d, T> {
     }
 
     #[inline]
-    pub async fn wait_for_high<'a>(&mut self) {
+    pub async fn wait_for_high(&mut self) {
         InputFuture::new(&mut self.pin, InterruptTrigger::LevelHigh).await;
     }
 
     #[inline]
-    pub async fn wait_for_low<'a>(&mut self) {
+    pub async fn wait_for_low(&mut self) {
         InputFuture::new(&mut self.pin, InterruptTrigger::LevelLow).await;
     }
 
     #[inline]
-    pub async fn wait_for_rising_edge<'a>(&mut self) {
+    pub async fn wait_for_rising_edge(&mut self) {
         self.wait_for_low().await;
         self.wait_for_high().await;
     }
 
     #[inline]
-    pub async fn wait_for_falling_edge<'a>(&mut self) {
+    pub async fn wait_for_falling_edge(&mut self) {
         self.wait_for_high().await;
         self.wait_for_low().await;
     }
 
     #[inline]
-    pub async fn wait_for_any_edge<'a>(&mut self) {
+    pub async fn wait_for_any_edge(&mut self) {
         if self.is_high() {
             self.wait_for_low().await;
         } else {
@@ -582,7 +586,7 @@ impl<'d, T: Pin> Drop for Flex<'d, T> {
         unsafe {
             self.pin.pad_ctrl().write(|_| {});
             self.pin.io().ctrl().write(|w| {
-                w.set_funcsel(pac::io::vals::Gpio0CtrlFuncsel::NULL.0);
+                w.set_funcsel(pac::io::vals::Gpio0ctrlFuncsel::NULL.0);
             });
         }
     }
@@ -595,12 +599,12 @@ pub(crate) mod sealed {
         fn pin_bank(&self) -> u8;
 
         #[inline]
-        fn pin(&self) -> u8 {
+        fn _pin(&self) -> u8 {
             self.pin_bank() & 0x1f
         }
 
         #[inline]
-        fn bank(&self) -> Bank {
+        fn _bank(&self) -> Bank {
             if self.pin_bank() & 0x20 == 0 {
                 Bank::Bank0
             } else {
@@ -609,35 +613,35 @@ pub(crate) mod sealed {
         }
 
         fn io(&self) -> pac::io::Gpio {
-            let block = match self.bank() {
+            let block = match self._bank() {
                 Bank::Bank0 => crate::pac::IO_BANK0,
                 Bank::Qspi => crate::pac::IO_QSPI,
             };
-            block.gpio(self.pin() as _)
+            block.gpio(self._pin() as _)
         }
 
         fn pad_ctrl(&self) -> Reg<pac::pads::regs::GpioCtrl, RW> {
-            let block = match self.bank() {
+            let block = match self._bank() {
                 Bank::Bank0 => crate::pac::PADS_BANK0,
                 Bank::Qspi => crate::pac::PADS_QSPI,
             };
-            block.gpio(self.pin() as _)
+            block.gpio(self._pin() as _)
         }
 
         fn sio_out(&self) -> pac::sio::Gpio {
-            SIO.gpio_out(self.bank() as _)
+            SIO.gpio_out(self._bank() as _)
         }
 
         fn sio_oe(&self) -> pac::sio::Gpio {
-            SIO.gpio_oe(self.bank() as _)
+            SIO.gpio_oe(self._bank() as _)
         }
 
         fn sio_in(&self) -> Reg<u32, RW> {
-            SIO.gpio_in(self.bank() as _)
+            SIO.gpio_in(self._bank() as _)
         }
 
         fn int_proc(&self) -> pac::io::Int {
-            let io_block = match self.bank() {
+            let io_block = match self._bank() {
                 Bank::Bank0 => crate::pac::IO_BANK0,
                 Bank::Qspi => crate::pac::IO_QSPI,
             };
@@ -653,6 +657,18 @@ pub trait Pin: Peripheral<P = Self> + Into<AnyPin> + sealed::Pin + Sized + 'stat
         AnyPin {
             pin_bank: self.pin_bank(),
         }
+    }
+
+    /// Returns the pin number within a bank
+    #[inline]
+    fn pin(&self) -> u8 {
+        self._pin()
+    }
+
+    /// Returns the bank of this pin
+    #[inline]
+    fn bank(&self) -> Bank {
+        self._bank()
     }
 }
 
@@ -854,16 +870,13 @@ mod eh02 {
 mod eh1 {
     use core::convert::Infallible;
 
-    #[cfg(feature = "nightly")]
-    use futures::FutureExt;
-
     use super::*;
 
     impl<'d, T: Pin> embedded_hal_1::digital::ErrorType for Input<'d, T> {
         type Error = Infallible;
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::InputPin for Input<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::InputPin for Input<'d, T> {
         fn is_high(&self) -> Result<bool, Self::Error> {
             Ok(self.is_high())
         }
@@ -877,7 +890,7 @@ mod eh1 {
         type Error = Infallible;
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::OutputPin for Output<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::OutputPin for Output<'d, T> {
         fn set_high(&mut self) -> Result<(), Self::Error> {
             Ok(self.set_high())
         }
@@ -887,7 +900,7 @@ mod eh1 {
         }
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::StatefulOutputPin for Output<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::StatefulOutputPin for Output<'d, T> {
         fn is_set_high(&self) -> Result<bool, Self::Error> {
             Ok(self.is_set_high())
         }
@@ -897,7 +910,7 @@ mod eh1 {
         }
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::ToggleableOutputPin for Output<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::ToggleableOutputPin for Output<'d, T> {
         fn toggle(&mut self) -> Result<(), Self::Error> {
             Ok(self.toggle())
         }
@@ -907,7 +920,7 @@ mod eh1 {
         type Error = Infallible;
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::OutputPin for OutputOpenDrain<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::OutputPin for OutputOpenDrain<'d, T> {
         fn set_high(&mut self) -> Result<(), Self::Error> {
             Ok(self.set_high())
         }
@@ -917,7 +930,7 @@ mod eh1 {
         }
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::StatefulOutputPin for OutputOpenDrain<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::StatefulOutputPin for OutputOpenDrain<'d, T> {
         fn is_set_high(&self) -> Result<bool, Self::Error> {
             Ok(self.is_set_high())
         }
@@ -927,7 +940,7 @@ mod eh1 {
         }
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::ToggleableOutputPin for OutputOpenDrain<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::ToggleableOutputPin for OutputOpenDrain<'d, T> {
         fn toggle(&mut self) -> Result<(), Self::Error> {
             Ok(self.toggle())
         }
@@ -937,7 +950,7 @@ mod eh1 {
         type Error = Infallible;
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::InputPin for Flex<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::InputPin for Flex<'d, T> {
         fn is_high(&self) -> Result<bool, Self::Error> {
             Ok(self.is_high())
         }
@@ -947,7 +960,7 @@ mod eh1 {
         }
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::OutputPin for Flex<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::OutputPin for Flex<'d, T> {
         fn set_high(&mut self) -> Result<(), Self::Error> {
             Ok(self.set_high())
         }
@@ -957,7 +970,7 @@ mod eh1 {
         }
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::StatefulOutputPin for Flex<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::StatefulOutputPin for Flex<'d, T> {
         fn is_set_high(&self) -> Result<bool, Self::Error> {
             Ok(self.is_set_high())
         }
@@ -967,7 +980,7 @@ mod eh1 {
         }
     }
 
-    impl<'d, T: Pin> embedded_hal_1::digital::blocking::ToggleableOutputPin for Flex<'d, T> {
+    impl<'d, T: Pin> embedded_hal_1::digital::ToggleableOutputPin for Flex<'d, T> {
         fn toggle(&mut self) -> Result<(), Self::Error> {
             Ok(self.toggle())
         }
@@ -975,57 +988,57 @@ mod eh1 {
 
     #[cfg(feature = "nightly")]
     impl<'d, T: Pin> embedded_hal_async::digital::Wait for Flex<'d, T> {
-        type WaitForHighFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_high<'a>(&'a mut self) -> Self::WaitForHighFuture<'a> {
-            self.wait_for_high().map(Ok)
+        async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_high().await;
+            Ok(())
         }
 
-        type WaitForLowFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_low<'a>(&'a mut self) -> Self::WaitForLowFuture<'a> {
-            self.wait_for_low().map(Ok)
+        async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_low().await;
+            Ok(())
         }
 
-        type WaitForRisingEdgeFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_rising_edge<'a>(&'a mut self) -> Self::WaitForRisingEdgeFuture<'a> {
-            self.wait_for_rising_edge().map(Ok)
+        async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_rising_edge().await;
+            Ok(())
         }
 
-        type WaitForFallingEdgeFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_falling_edge<'a>(&'a mut self) -> Self::WaitForFallingEdgeFuture<'a> {
-            self.wait_for_falling_edge().map(Ok)
+        async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_falling_edge().await;
+            Ok(())
         }
 
-        type WaitForAnyEdgeFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_any_edge<'a>(&'a mut self) -> Self::WaitForAnyEdgeFuture<'a> {
-            self.wait_for_any_edge().map(Ok)
+        async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_any_edge().await;
+            Ok(())
         }
     }
 
     #[cfg(feature = "nightly")]
     impl<'d, T: Pin> embedded_hal_async::digital::Wait for Input<'d, T> {
-        type WaitForHighFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_high<'a>(&'a mut self) -> Self::WaitForHighFuture<'a> {
-            self.wait_for_high().map(Ok)
+        async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_high().await;
+            Ok(())
         }
 
-        type WaitForLowFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_low<'a>(&'a mut self) -> Self::WaitForLowFuture<'a> {
-            self.wait_for_low().map(Ok)
+        async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_low().await;
+            Ok(())
         }
 
-        type WaitForRisingEdgeFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_rising_edge<'a>(&'a mut self) -> Self::WaitForRisingEdgeFuture<'a> {
-            self.wait_for_rising_edge().map(Ok)
+        async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_rising_edge().await;
+            Ok(())
         }
 
-        type WaitForFallingEdgeFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_falling_edge<'a>(&'a mut self) -> Self::WaitForFallingEdgeFuture<'a> {
-            self.wait_for_falling_edge().map(Ok)
+        async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_falling_edge().await;
+            Ok(())
         }
 
-        type WaitForAnyEdgeFuture<'a> = impl Future<Output = Result<(), Self::Error>> + 'a where Self: 'a;
-        fn wait_for_any_edge<'a>(&'a mut self) -> Self::WaitForAnyEdgeFuture<'a> {
-            self.wait_for_any_edge().map(Ok)
+        async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
+            self.wait_for_any_edge().await;
+            Ok(())
         }
     }
 }

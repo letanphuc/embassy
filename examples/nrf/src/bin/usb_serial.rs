@@ -1,22 +1,22 @@
 #![no_std]
 #![no_main]
-#![feature(generic_associated_types)]
 #![feature(type_alias_impl_trait)]
 
 use core::mem;
 
 use defmt::{info, panic};
-use embassy_executor::executor::Spawner;
+use embassy_executor::Spawner;
+use embassy_futures::join::join;
 use embassy_nrf::usb::{Driver, Instance, PowerUsb, UsbSupply};
-use embassy_nrf::{interrupt, pac, Peripherals};
+use embassy_nrf::{interrupt, pac};
+use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config};
-use embassy_usb_serial::{CdcAcmClass, State};
-use futures::future::join;
 use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner, p: Peripherals) {
+async fn main(_spawner: Spawner) {
+    let p = embassy_nrf::init(Default::default());
     let clock: pac::CLOCK = unsafe { mem::transmute(()) };
 
     info!("Enabling ext hfosc...");

@@ -5,7 +5,7 @@ use core::task::Waker;
 use embassy_cortex_m::peripheral::{PeripheralMutex, PeripheralState, StateStorage};
 use embassy_hal_common::{into_ref, PeripheralRef};
 use embassy_net::{Device, DeviceCapabilities, LinkState, PacketBuf, MTU};
-use embassy_util::waitqueue::AtomicWaker;
+use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::gpio::sealed::{AFType, Pin as _};
 use crate::gpio::{AnyPin, Speed};
@@ -19,7 +19,7 @@ use super::*;
 
 pub struct State<'d, T: Instance, const TX: usize, const RX: usize>(StateStorage<Inner<'d, T, TX, RX>>);
 impl<'d, T: Instance, const TX: usize, const RX: usize> State<'d, T, TX, RX> {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self(StateStorage::new())
     }
 }
@@ -115,6 +115,24 @@ impl<'d, T: Instance, P: PHY, const TX: usize, const RX: usize> Ethernet<'d, T, 
         });
 
         mac.macqtx_fcr().modify(|w| w.set_pt(0x100));
+
+        // disable all MMC RX interrupts
+        mac.mmc_rx_interrupt_mask().write(|w| {
+            w.set_rxcrcerpim(true);
+            w.set_rxalgnerpim(true);
+            w.set_rxucgpim(true);
+            w.set_rxlpiuscim(true);
+            w.set_rxlpitrcim(true)
+        });
+
+        // disable all MMC TX interrupts
+        mac.mmc_tx_interrupt_mask().write(|w| {
+            w.set_txscolgpim(true);
+            w.set_txmcolgpim(true);
+            w.set_txgpktim(true);
+            w.set_txlpiuscim(true);
+            w.set_txlpitrcim(true);
+        });
 
         mtl.mtlrx_qomr().modify(|w| w.set_rsf(true));
         mtl.mtltx_qomr().modify(|w| w.set_tsf(true));

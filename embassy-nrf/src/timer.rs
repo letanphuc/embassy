@@ -1,12 +1,12 @@
 #![macro_use]
 
+use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::task::Poll;
 
 use embassy_hal_common::drop::OnDrop;
 use embassy_hal_common::{into_ref, PeripheralRef};
-use embassy_util::waitqueue::AtomicWaker;
-use futures::future::poll_fn;
+use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::interrupt::{Interrupt, InterruptExt};
 use crate::ppi::{Event, Task};
@@ -40,8 +40,8 @@ macro_rules! impl_timer {
             fn regs() -> &'static pac::timer0::RegisterBlock {
                 unsafe { &*(pac::$pac_type::ptr() as *const pac::timer0::RegisterBlock) }
             }
-            fn waker(n: usize) -> &'static ::embassy_util::waitqueue::AtomicWaker {
-                use ::embassy_util::waitqueue::AtomicWaker;
+            fn waker(n: usize) -> &'static ::embassy_sync::waitqueue::AtomicWaker {
+                use ::embassy_sync::waitqueue::AtomicWaker;
                 const NEW_AW: AtomicWaker = AtomicWaker::new();
                 static WAKERS: [AtomicWaker; $ccs] = [NEW_AW; $ccs];
                 &WAKERS[n]

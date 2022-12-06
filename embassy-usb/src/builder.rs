@@ -1,15 +1,15 @@
 use heapless::Vec;
 
-use super::control::ControlHandler;
-use super::descriptor::{BosWriter, DescriptorWriter};
-use super::driver::{Driver, Endpoint};
-use super::types::*;
-use super::{DeviceStateHandler, UsbDevice, MAX_INTERFACE_COUNT};
-use crate::{Interface, STRING_INDEX_CUSTOM_START};
+use crate::control::ControlHandler;
+use crate::descriptor::{BosWriter, DescriptorWriter};
+use crate::driver::{Driver, Endpoint, EndpointType};
+use crate::types::*;
+use crate::{DeviceStateHandler, Interface, UsbDevice, MAX_INTERFACE_COUNT, STRING_INDEX_CUSTOM_START};
 
 #[derive(Debug, Copy, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
+/// Configuration used when creating [UsbDevice].
 pub struct Config<'a> {
     pub(crate) vendor_id: u16,
     pub(crate) product_id: u16,
@@ -96,6 +96,7 @@ pub struct Config<'a> {
 }
 
 impl<'a> Config<'a> {
+    /// Create default configuration with the provided vid and pid values.
     pub fn new(vid: u16, pid: u16) -> Self {
         Self {
             device_class: 0x00,

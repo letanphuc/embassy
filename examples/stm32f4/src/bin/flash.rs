@@ -3,17 +3,17 @@
 #![feature(type_alias_impl_trait)]
 
 use defmt::{info, unwrap};
-use embassy_executor::executor::Spawner;
+use embassy_executor::Spawner;
 use embassy_stm32::flash::Flash;
-use embassy_stm32::Peripherals;
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
-async fn main(_spawner: Spawner, p: Peripherals) {
+async fn main(_spawner: Spawner) {
+    let p = embassy_stm32::init(Default::default());
     info!("Hello Flash!");
 
-    let mut f = Flash::unlock(p.FLASH);
+    let mut f = Flash::new(p.FLASH);
 
     // Sector 5
     test_flash(&mut f, 128 * 1024, 128 * 1024);
