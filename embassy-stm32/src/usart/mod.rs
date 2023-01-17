@@ -2,9 +2,9 @@
 
 use core::future::poll_fn;
 use core::marker::PhantomData;
+use core::sync::atomic::{compiler_fence, Ordering};
 use core::task::Poll;
 
-use atomic_polyfill::{compiler_fence, Ordering};
 use embassy_cortex_m::interrupt::InterruptExt;
 use embassy_futures::select::{select, Either};
 use embassy_hal_common::drop::OnDrop;
@@ -646,6 +646,31 @@ impl<'d, T: BasicInstance, TxDma, RxDma> Uart<'d, T, TxDma, RxDma> {
         Self::new_inner(peri, rx, tx, irq, tx_dma, rx_dma, config)
     }
 
+    #[cfg(not(usart_v1))]
+    pub fn new_with_de(
+        peri: impl Peripheral<P = T> + 'd,
+        rx: impl Peripheral<P = impl RxPin<T>> + 'd,
+        tx: impl Peripheral<P = impl TxPin<T>> + 'd,
+        irq: impl Peripheral<P = T::Interrupt> + 'd,
+        de: impl Peripheral<P = impl DePin<T>> + 'd,
+        tx_dma: impl Peripheral<P = TxDma> + 'd,
+        rx_dma: impl Peripheral<P = RxDma> + 'd,
+        config: Config,
+    ) -> Self {
+        into_ref!(de);
+
+        T::enable();
+        T::reset();
+
+        unsafe {
+            de.set_as_af(de.af_num(), AFType::OutputPushPull);
+            T::regs().cr3().write(|w| {
+                w.set_dem(true);
+            });
+        }
+        Self::new_inner(peri, rx, tx, irq, tx_dma, rx_dma, config)
+    }
+
     fn new_inner(
         peri: impl Peripheral<P = T> + 'd,
         rx: impl Peripheral<P = impl RxPin<T>> + 'd,
@@ -885,6 +910,58 @@ mod eh1 {
     }
 }
 
+#[cfg(all(feature = "unstable-traits", feature = "nightly"))]
+mod eio {
+    use embedded_io::asynch::Write;
+    use embedded_io::Io;
+
+    use super::*;
+
+    impl<T, TxDma, RxDma> Io for Uart<'_, T, TxDma, RxDma>
+    where
+        T: BasicInstance,
+    {
+        type Error = Error;
+    }
+
+    impl<T, TxDma, RxDma> Write for Uart<'_, T, TxDma, RxDma>
+    where
+        T: BasicInstance,
+        TxDma: super::TxDma<T>,
+    {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.write(buf).await?;
+            Ok(buf.len())
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            self.blocking_flush()
+        }
+    }
+
+    impl<T, TxDma> Io for UartTx<'_, T, TxDma>
+    where
+        T: BasicInstance,
+    {
+        type Error = Error;
+    }
+
+    impl<T, TxDma> Write for UartTx<'_, T, TxDma>
+    where
+        T: BasicInstance,
+        TxDma: super::TxDma<T>,
+    {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.write(buf).await?;
+            Ok(buf.len())
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            self.blocking_flush()
+        }
+    }
+}
+
 #[cfg(all(
     feature = "unstable-traits",
     feature = "nightly",
@@ -1040,6 +1117,7 @@ pin_trait!(TxPin, BasicInstance);
 pin_trait!(CtsPin, BasicInstance);
 pin_trait!(RtsPin, BasicInstance);
 pin_trait!(CkPin, BasicInstance);
+pin_trait!(DePin, BasicInstance);
 
 dma_trait!(TxDma, BasicInstance);
 dma_trait!(RxDma, BasicInstance);
