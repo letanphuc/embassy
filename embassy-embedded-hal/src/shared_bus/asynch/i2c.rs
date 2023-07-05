@@ -54,39 +54,41 @@ where
     M: RawMutex + 'static,
     BUS: i2c::I2c + 'static,
 {
-    async fn read<'a>(&'a mut self, address: u8, buffer: &'a mut [u8]) -> Result<(), I2cDeviceError<BUS::Error>> {
+    async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), I2cDeviceError<BUS::Error>> {
         let mut bus = self.bus.lock().await;
-        bus.read(address, buffer).await.map_err(I2cDeviceError::I2c)?;
+        bus.read(address, read).await.map_err(I2cDeviceError::I2c)?;
         Ok(())
     }
 
-    async fn write<'a>(&'a mut self, address: u8, bytes: &'a [u8]) -> Result<(), I2cDeviceError<BUS::Error>> {
+    async fn write(&mut self, address: u8, write: &[u8]) -> Result<(), I2cDeviceError<BUS::Error>> {
         let mut bus = self.bus.lock().await;
-        bus.write(address, bytes).await.map_err(I2cDeviceError::I2c)?;
+        bus.write(address, write).await.map_err(I2cDeviceError::I2c)?;
         Ok(())
     }
 
-    async fn write_read<'a>(
-        &'a mut self,
+    async fn write_read(
+        &mut self,
         address: u8,
-        wr_buffer: &'a [u8],
-        rd_buffer: &'a mut [u8],
+        write: &[u8],
+        read: &mut [u8],
     ) -> Result<(), I2cDeviceError<BUS::Error>> {
         let mut bus = self.bus.lock().await;
-        bus.write_read(address, wr_buffer, rd_buffer)
+        bus.write_read(address, write, read)
             .await
             .map_err(I2cDeviceError::I2c)?;
         Ok(())
     }
 
-    async fn transaction<'a, 'b>(
-        &'a mut self,
+    async fn transaction(
+        &mut self,
         address: u8,
-        operations: &'a mut [embedded_hal_async::i2c::Operation<'b>],
+        operations: &mut [embedded_hal_async::i2c::Operation<'_>],
     ) -> Result<(), I2cDeviceError<BUS::Error>> {
-        let _ = address;
-        let _ = operations;
-        todo!()
+        let mut bus = self.bus.lock().await;
+        bus.transaction(address, operations)
+            .await
+            .map_err(I2cDeviceError::I2c)?;
+        Ok(())
     }
 }
 
@@ -121,25 +123,25 @@ where
     M: RawMutex + 'static,
     BUS: i2c::I2c + SetConfig + 'static,
 {
-    async fn read<'a>(&'a mut self, address: u8, buffer: &'a mut [u8]) -> Result<(), I2cDeviceError<BUS::Error>> {
+    async fn read(&mut self, address: u8, buffer: &mut [u8]) -> Result<(), I2cDeviceError<BUS::Error>> {
         let mut bus = self.bus.lock().await;
         bus.set_config(&self.config);
         bus.read(address, buffer).await.map_err(I2cDeviceError::I2c)?;
         Ok(())
     }
 
-    async fn write<'a>(&'a mut self, address: u8, bytes: &'a [u8]) -> Result<(), I2cDeviceError<BUS::Error>> {
+    async fn write(&mut self, address: u8, bytes: &[u8]) -> Result<(), I2cDeviceError<BUS::Error>> {
         let mut bus = self.bus.lock().await;
         bus.set_config(&self.config);
         bus.write(address, bytes).await.map_err(I2cDeviceError::I2c)?;
         Ok(())
     }
 
-    async fn write_read<'a>(
-        &'a mut self,
+    async fn write_read(
+        &mut self,
         address: u8,
-        wr_buffer: &'a [u8],
-        rd_buffer: &'a mut [u8],
+        wr_buffer: &[u8],
+        rd_buffer: &mut [u8],
     ) -> Result<(), I2cDeviceError<BUS::Error>> {
         let mut bus = self.bus.lock().await;
         bus.set_config(&self.config);
@@ -149,13 +151,12 @@ where
         Ok(())
     }
 
-    async fn transaction<'a, 'b>(
-        &'a mut self,
-        address: u8,
-        operations: &'a mut [embedded_hal_async::i2c::Operation<'b>],
-    ) -> Result<(), I2cDeviceError<BUS::Error>> {
-        let _ = address;
-        let _ = operations;
-        todo!()
+    async fn transaction(&mut self, address: u8, operations: &mut [i2c::Operation<'_>]) -> Result<(), Self::Error> {
+        let mut bus = self.bus.lock().await;
+        bus.set_config(&self.config);
+        bus.transaction(address, operations)
+            .await
+            .map_err(I2cDeviceError::I2c)?;
+        Ok(())
     }
 }

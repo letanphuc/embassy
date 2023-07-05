@@ -1,23 +1,26 @@
 {
   "editor.formatOnSave": true,
+  "[toml]": {
+    "editor.formatOnSave": false
+  },
   "rust-analyzer.check.allTargets": false,
   "rust-analyzer.check.noDefaultFeatures": true,
   "rust-analyzer.cargo.noDefaultFeatures": true,
-  "rust-analyzer.procMacro.enable": true,
-  "rust-analyzer.cargo.target": "thumbv7em-none-eabi",
+  "rust-analyzer.cargo.target": "thumbv7m-none-eabi",
   //"rust-analyzer.cargo.target": "thumbv8m.main-none-eabihf",
   "rust-analyzer.cargo.features": [
-    "nightly",
+    ///"nightly",
   ],
   "rust-analyzer.linkedProjects": [
     // Declare for the target you wish to develop
     // "embassy-executor/Cargo.toml",
     // "embassy-sync/Cargo.toml",
-    "examples/nrf52840/Cargo.toml",
-    //"examples/nrf5340/Cargo.toml",
+    "examples/stm32wl/Cargo.toml",
+    // "examples/nrf5340/Cargo.toml",
     // "examples/nrf-rtos-trace/Cargo.toml",
     // "examples/rp/Cargo.toml",
     // "examples/std/Cargo.toml",
+    // "examples/stm32c0/Cargo.toml",
     // "examples/stm32f0/Cargo.toml",
     // "examples/stm32f1/Cargo.toml",
     // "examples/stm32f2/Cargo.toml",
@@ -26,6 +29,7 @@
     // "examples/stm32f7/Cargo.toml",
     // "examples/stm32g0/Cargo.toml",
     // "examples/stm32g4/Cargo.toml",
+    // "examples/stm32h5/Cargo.toml",
     // "examples/stm32h7/Cargo.toml",
     // "examples/stm32l0/Cargo.toml",
     // "examples/stm32l1/Cargo.toml",
@@ -33,13 +37,7 @@
     // "examples/stm32l5/Cargo.toml",
     // "examples/stm32u5/Cargo.toml",
     // "examples/stm32wb/Cargo.toml",
-    // "examples/stm32wb55/Cargo.toml",
     // "examples/stm32wl/Cargo.toml",
-    // "examples/stm32wl55/Cargo.toml",
     // "examples/wasm/Cargo.toml",
   ],
-  "rust-analyzer.imports.granularity.enforce": true,
-  "rust-analyzer.imports.granularity.group": "module",
-  "rust-analyzer.cargo.buildScripts.enable": true,
-  "rust-analyzer.procMacro.attributes.enable": false,
 }

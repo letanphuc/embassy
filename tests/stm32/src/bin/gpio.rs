@@ -1,13 +1,13 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
+#[path = "../common.rs"]
+mod common;
 
-#[path = "../example_common.rs"]
-mod example_common;
+use common::*;
 use defmt::assert;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Flex, Input, Level, Output, OutputOpenDrain, Pull, Speed};
-use example_common::*;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -30,6 +30,10 @@ async fn main(_spawner: Spawner) {
     let (mut a, mut b) = (p.PB6, p.PB7);
     #[cfg(feature = "stm32u585ai")]
     let (mut a, mut b) = (p.PD9, p.PD8);
+    #[cfg(feature = "stm32h563zi")]
+    let (mut a, mut b) = (p.PB6, p.PB7);
+    #[cfg(feature = "stm32c031c6")]
+    let (mut a, mut b) = (p.PB6, p.PB7);
 
     // Test initial output
     {

@@ -1,12 +1,9 @@
+//! I2C-compatible Two Wire Interface in slave mode (TWIM) driver.
+
 #![macro_use]
 
-//! HAL interface to the TWIS peripheral.
-//!
-//! See product specification:
-//!
-//! - nRF52832: Section 33
-//! - nRF52840: Section 6.31
 use core::future::{poll_fn, Future};
+use core::marker::PhantomData;
 use core::sync::atomic::compiler_fence;
 use core::sync::atomic::Ordering::SeqCst;
 use core::task::Poll;
@@ -18,18 +15,41 @@ use embassy_time::{Duration, Instant};
 
 use crate::chip::{EASY_DMA_SIZE, FORCE_COPY_BUFFER_SIZE};
 use crate::gpio::Pin as GpioPin;
-use crate::interrupt::{Interrupt, InterruptExt};
+use crate::interrupt::typelevel::Interrupt;
 use crate::util::slice_in_ram_or;
-use crate::{gpio, pac, Peripheral};
+use crate::{gpio, interrupt, pac, Peripheral};
 
+/// TWIS config.
 #[non_exhaustive]
 pub struct Config {
+    /// First address
     pub address0: u8,
+
+    /// Second address, optional.
     pub address1: Option<u8>,
+
+    /// Overread character.
+    ///
+    /// If the master keeps clocking the bus after all the bytes in the TX buffer have
+    /// already been transmitted, this byte will be constantly transmitted.
     pub orc: u8,
+
+    /// Enable high drive for the SDA line.
     pub sda_high_drive: bool,
+
+    /// Enable internal pullup for the SDA line.
+    ///
+    /// Note that using external pullups is recommended for I2C, and
+    /// most boards already have them.
     pub sda_pullup: bool,
+
+    /// Enable high drive for the SCL line.
     pub scl_high_drive: bool,
+
+    /// Enable internal pullup for the SCL line.
+    ///
+    /// Note that using external pullups is recommended for I2C, and
+    /// most boards already have them.
     pub scl_pullup: bool,
 }
 
@@ -54,44 +74,81 @@ enum Status {
     Write,
 }
 
+/// TWIS error.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum Error {
+    /// TX buffer was too long.
     TxBufferTooLong,
+    /// RX buffer was too long.
     RxBufferTooLong,
+    /// Didn't receive an ACK bit after a data byte.
     DataNack,
+    /// Bus error.
     Bus,
-    DMABufferNotInDataMemory,
+    /// The buffer is not in data RAM. It's most likely in flash, and nRF's DMA cannot access flash.
+    BufferNotInRAM,
+    /// Overflow
     Overflow,
+    /// Overread
     OverRead,
+    /// Timeout
     Timeout,
 }
 
+/// Received command
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Command {
+    /// Read
     Read,
+    /// Write+read
     WriteRead(usize),
+    /// Write
     Write(usize),
 }
 
-/// Interface to a TWIS instance using EasyDMA to offload the transmission and reception workload.
-///
-/// For more details about EasyDMA, consult the module documentation.
+/// Interrupt handler.
+pub struct InterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        let r = T::regs();
+        let s = T::state();
+
+        if r.events_read.read().bits() != 0 || r.events_write.read().bits() != 0 {
+            s.waker.wake();
+            r.intenclr.modify(|_r, w| w.read().clear().write().clear());
+        }
+        if r.events_stopped.read().bits() != 0 {
+            s.waker.wake();
+            r.intenclr.modify(|_r, w| w.stopped().clear());
+        }
+        if r.events_error.read().bits() != 0 {
+            s.waker.wake();
+            r.intenclr.modify(|_r, w| w.error().clear());
+        }
+    }
+}
+
+/// TWIS driver.
 pub struct Twis<'d, T: Instance> {
     _p: PeripheralRef<'d, T>,
 }
 
 impl<'d, T: Instance> Twis<'d, T> {
+    /// Create a new TWIS driver.
     pub fn new(
         twis: impl Peripheral<P = T> + 'd,
-        irq: impl Peripheral<P = T::Interrupt> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         sda: impl Peripheral<P = impl GpioPin> + 'd,
         scl: impl Peripheral<P = impl GpioPin> + 'd,
         config: Config,
     ) -> Self {
-        into_ref!(twis, irq, sda, scl);
+        into_ref!(twis, sda, scl);
 
         let r = T::regs();
 
@@ -147,34 +204,15 @@ impl<'d, T: Instance> Twis<'d, T> {
         // Generate suspend on read event
         r.shorts.write(|w| w.read_suspend().enabled());
 
-        irq.set_handler(Self::on_interrupt);
-        irq.unpend();
-        irq.enable();
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
 
         Self { _p: twis }
     }
 
-    fn on_interrupt(_: *mut ()) {
-        let r = T::regs();
-        let s = T::state();
-
-        if r.events_read.read().bits() != 0 || r.events_write.read().bits() != 0 {
-            s.waker.wake();
-            r.intenclr.modify(|_r, w| w.read().clear().write().clear());
-        }
-        if r.events_stopped.read().bits() != 0 {
-            s.waker.wake();
-            r.intenclr.modify(|_r, w| w.stopped().clear());
-        }
-        if r.events_error.read().bits() != 0 {
-            s.waker.wake();
-            r.intenclr.modify(|_r, w| w.error().clear());
-        }
-    }
-
     /// Set TX buffer, checking that it is in RAM and has suitable length.
     unsafe fn set_tx_buffer(&mut self, buffer: &[u8]) -> Result<(), Error> {
-        slice_in_ram_or(buffer, Error::DMABufferNotInDataMemory)?;
+        slice_in_ram_or(buffer, Error::BufferNotInRAM)?;
 
         if buffer.len() > EASY_DMA_SIZE {
             return Err(Error::TxBufferTooLong);
@@ -282,7 +320,7 @@ impl<'d, T: Instance> Twis<'d, T> {
     fn blocking_listen_wait_end(&mut self, status: Status) -> Result<Command, Error> {
         let r = T::regs();
         loop {
-            // stop if an error occured
+            // stop if an error occurred
             if r.events_error.read().bits() != 0 {
                 r.events_error.reset();
                 r.tasks_stop.write(|w| unsafe { w.bits(1) });
@@ -308,7 +346,7 @@ impl<'d, T: Instance> Twis<'d, T> {
     fn blocking_wait(&mut self) -> Result<usize, Error> {
         let r = T::regs();
         loop {
-            // stop if an error occured
+            // stop if an error occurred
             if r.events_error.read().bits() != 0 {
                 r.events_error.reset();
                 r.tasks_stop.write(|w| unsafe { w.bits(1) });
@@ -334,7 +372,7 @@ impl<'d, T: Instance> Twis<'d, T> {
         let r = T::regs();
         let deadline = Instant::now() + timeout;
         loop {
-            // stop if an error occured
+            // stop if an error occurred
             if r.events_error.read().bits() != 0 {
                 r.events_error.reset();
                 r.tasks_stop.write(|w| unsafe { w.bits(1) });
@@ -394,7 +432,7 @@ impl<'d, T: Instance> Twis<'d, T> {
         let r = T::regs();
         let deadline = Instant::now() + timeout;
         loop {
-            // stop if an error occured
+            // stop if an error occurred
             if r.events_error.read().bits() != 0 {
                 r.events_error.reset();
                 r.tasks_stop.write(|w| unsafe { w.bits(1) });
@@ -427,7 +465,7 @@ impl<'d, T: Instance> Twis<'d, T> {
 
             s.waker.register(cx.waker());
 
-            // stop if an error occured
+            // stop if an error occurred
             if r.events_error.read().bits() != 0 {
                 r.events_error.reset();
                 r.tasks_stop.write(|w| unsafe { w.bits(1) });
@@ -457,7 +495,7 @@ impl<'d, T: Instance> Twis<'d, T> {
 
             s.waker.register(cx.waker());
 
-            // stop if an error occured
+            // stop if an error occurred
             if r.events_error.read().bits() != 0 {
                 r.events_error.reset();
                 r.tasks_stop.write(|w| unsafe { w.bits(1) });
@@ -484,7 +522,7 @@ impl<'d, T: Instance> Twis<'d, T> {
 
             s.waker.register(cx.waker());
 
-            // stop if an error occured
+            // stop if an error occurred
             if r.events_error.read().bits() != 0 {
                 r.events_error.reset();
                 r.tasks_stop.write(|w| unsafe { w.bits(1) });
@@ -535,7 +573,7 @@ impl<'d, T: Instance> Twis<'d, T> {
     fn setup_respond(&mut self, wr_buffer: &[u8], inten: bool) -> Result<(), Error> {
         match self.setup_respond_from_ram(wr_buffer, inten) {
             Ok(_) => Ok(()),
-            Err(Error::DMABufferNotInDataMemory) => {
+            Err(Error::BufferNotInRAM) => {
                 trace!("Copying TWIS tx buffer into RAM for DMA");
                 let tx_ram_buf = &mut [0; FORCE_COPY_BUFFER_SIZE][..wr_buffer.len()];
                 tx_ram_buf.copy_from_slice(wr_buffer);
@@ -737,8 +775,10 @@ pub(crate) mod sealed {
     }
 }
 
+/// TWIS peripheral instance.
 pub trait Instance: Peripheral<P = Self> + sealed::Instance + 'static {
-    type Interrupt: Interrupt;
+    /// Interrupt for this peripheral.
+    type Interrupt: interrupt::typelevel::Interrupt;
 }
 
 macro_rules! impl_twis {
@@ -753,7 +793,7 @@ macro_rules! impl_twis {
             }
         }
         impl crate::twis::Instance for peripherals::$type {
-            type Interrupt = crate::interrupt::$irq;
+            type Interrupt = crate::interrupt::typelevel::$irq;
         }
     };
 }

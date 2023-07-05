@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 #![feature(type_alias_impl_trait)]
+#[path = "../common.rs"]
+mod common;
 
 use defmt::*;
 use embassy_executor::Spawner;
@@ -22,6 +24,15 @@ async fn main(_spawner: Spawner) {
     Timer::after(Duration::from_millis(10)).await;
 
     let mut flash = embassy_rp::flash::Flash::<_, { 2 * 1024 * 1024 }>::new(p.FLASH);
+
+    // Get JEDEC id
+    let jedec = defmt::unwrap!(flash.jedec_id());
+    info!("jedec id: 0x{:x}", jedec);
+
+    // Get unique id
+    let mut uid = [0; 8];
+    defmt::unwrap!(flash.unique_id(&mut uid));
+    info!("unique id: {:?}", uid);
 
     let mut buf = [0u8; ERASE_SIZE];
     defmt::unwrap!(flash.read(ADDR_OFFSET, &mut buf));

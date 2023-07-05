@@ -74,7 +74,6 @@ impl<const N: usize> UsbLogger<N> {
             &mut state.config_descriptor,
             &mut state.bos_descriptor,
             &mut state.control_buf,
-            None,
         );
 
         // Create classes on the builder.
@@ -139,7 +138,7 @@ macro_rules! run {
     ( $x:expr, $l:expr, $p:ident ) => {
         static LOGGER: ::embassy_usb_logger::UsbLogger<$x> = ::embassy_usb_logger::UsbLogger::new();
         unsafe {
-            let _ = ::log::set_logger_racy(&LOGGER).map(|()| log::set_max_level($l));
+            let _ = ::log::set_logger_racy(&LOGGER).map(|()| log::set_max_level_racy($l));
         }
         let _ = LOGGER.run(&mut ::embassy_usb_logger::LoggerState::new(), $p).await;
     };

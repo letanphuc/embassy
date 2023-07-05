@@ -6,6 +6,8 @@ pub const FORCE_COPY_BUFFER_SIZE: usize = 512;
 
 pub const FLASH_SIZE: usize = 256 * 1024;
 
+pub const RESET_PIN: u32 = 18;
+
 embassy_hal_common::peripherals! {
     // USB
     USBD,
@@ -106,6 +108,7 @@ embassy_hal_common::peripherals! {
     P0_15,
     P0_16,
     P0_17,
+    #[cfg(feature="reset-pin-as-gpio")]
     P0_18,
     P0_19,
     P0_20,
@@ -150,6 +153,10 @@ impl_timer!(TIMER1, TIMER1, TIMER1);
 impl_timer!(TIMER2, TIMER2, TIMER2);
 impl_timer!(TIMER3, TIMER3, TIMER3, extended);
 
+impl_qdec!(QDEC, QDEC, QDEC);
+
+impl_rng!(RNG, RNG, RNG);
+
 impl_pin!(P0_00, 0, 0);
 impl_pin!(P0_01, 0, 1);
 impl_pin!(P0_02, 0, 2);
@@ -168,6 +175,7 @@ impl_pin!(P0_14, 0, 14);
 impl_pin!(P0_15, 0, 15);
 impl_pin!(P0_16, 0, 16);
 impl_pin!(P0_17, 0, 17);
+#[cfg(feature = "reset-pin-as-gpio")]
 impl_pin!(P0_18, 0, 18);
 impl_pin!(P0_19, 0, 19);
 impl_pin!(P0_20, 0, 20);
@@ -216,35 +224,31 @@ impl_ppi_channel!(PPI_CH29, 29 => static);
 impl_ppi_channel!(PPI_CH30, 30 => static);
 impl_ppi_channel!(PPI_CH31, 31 => static);
 
-pub mod irqs {
-    use embassy_cortex_m::interrupt::_export::declare;
-
-    use crate::pac::Interrupt as InterruptEnum;
-
-    declare!(POWER_CLOCK);
-    declare!(RADIO);
-    declare!(UARTE0_UART0);
-    declare!(SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0);
-    declare!(SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1);
-    declare!(GPIOTE);
-    declare!(TIMER0);
-    declare!(TIMER1);
-    declare!(TIMER2);
-    declare!(RTC0);
-    declare!(TEMP);
-    declare!(RNG);
-    declare!(ECB);
-    declare!(CCM_AAR);
-    declare!(WDT);
-    declare!(RTC1);
-    declare!(QDEC);
-    declare!(COMP);
-    declare!(SWI0_EGU0);
-    declare!(SWI1_EGU1);
-    declare!(SWI2_EGU2);
-    declare!(SWI3_EGU3);
-    declare!(SWI4_EGU4);
-    declare!(SWI5_EGU5);
-    declare!(TIMER3);
-    declare!(USBD);
-}
+embassy_hal_common::interrupt_mod!(
+    POWER_CLOCK,
+    RADIO,
+    UARTE0_UART0,
+    SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0,
+    SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1,
+    GPIOTE,
+    TIMER0,
+    TIMER1,
+    TIMER2,
+    RTC0,
+    TEMP,
+    RNG,
+    ECB,
+    CCM_AAR,
+    WDT,
+    RTC1,
+    QDEC,
+    COMP,
+    SWI0_EGU0,
+    SWI1_EGU1,
+    SWI2_EGU2,
+    SWI3_EGU3,
+    SWI4_EGU4,
+    SWI5_EGU5,
+    TIMER3,
+    USBD,
+);

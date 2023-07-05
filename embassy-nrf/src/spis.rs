@@ -1,5 +1,8 @@
+//! Serial Peripheral Instance in slave mode (SPIS) driver.
+
 #![macro_use]
 use core::future::poll_fn;
+use core::marker::PhantomData;
 use core::sync::atomic::{compiler_fence, Ordering};
 use core::task::Poll;
 
@@ -10,32 +13,42 @@ pub use embedded_hal_02::spi::{Mode, Phase, Polarity, MODE_0, MODE_1, MODE_2, MO
 use crate::chip::FORCE_COPY_BUFFER_SIZE;
 use crate::gpio::sealed::Pin as _;
 use crate::gpio::{self, AnyPin, Pin as GpioPin};
-use crate::interrupt::{Interrupt, InterruptExt};
+use crate::interrupt::typelevel::Interrupt;
 use crate::util::{slice_in_ram_or, slice_ptr_parts, slice_ptr_parts_mut};
-use crate::{pac, Peripheral};
+use crate::{interrupt, pac, Peripheral};
 
+/// SPIS error
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub enum Error {
+    /// TX buffer was too long.
     TxBufferTooLong,
+    /// RX buffer was too long.
     RxBufferTooLong,
     /// EasyDMA can only read from data memory, read only buffers in flash will fail.
-    DMABufferNotInDataMemory,
+    BufferNotInRAM,
 }
 
-/// Interface for the SPIS peripheral using EasyDMA to offload the transmission and reception workload.
-///
-/// For more details about EasyDMA, consult the module documentation.
-pub struct Spis<'d, T: Instance> {
-    _p: PeripheralRef<'d, T>,
-}
-
+/// SPIS configuration.
 #[non_exhaustive]
 pub struct Config {
+    /// SPI mode
     pub mode: Mode,
+
+    /// Overread character.
+    ///
+    /// If the master keeps clocking the bus after all the bytes in the TX buffer have
+    /// already been transmitted, this byte will be constantly transmitted in the MISO line.
     pub orc: u8,
+
+    /// Default byte.
+    ///
+    /// This is the byte clocked out in the MISO line for ignored transactions (if the master
+    /// sets CSN low while the semaphore is owned by the firmware)
     pub def: u8,
+
+    /// Automatically make the firmware side acquire the semaphore on transfer end.
     pub auto_acquire: bool,
 }
 
@@ -50,10 +63,38 @@ impl Default for Config {
     }
 }
 
+/// Interrupt handler.
+pub struct InterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        let r = T::regs();
+        let s = T::state();
+
+        if r.events_end.read().bits() != 0 {
+            s.waker.wake();
+            r.intenclr.write(|w| w.end().clear());
+        }
+
+        if r.events_acquired.read().bits() != 0 {
+            s.waker.wake();
+            r.intenclr.write(|w| w.acquired().clear());
+        }
+    }
+}
+
+/// SPIS driver.
+pub struct Spis<'d, T: Instance> {
+    _p: PeripheralRef<'d, T>,
+}
+
 impl<'d, T: Instance> Spis<'d, T> {
+    /// Create a new SPIS driver.
     pub fn new(
         spis: impl Peripheral<P = T> + 'd,
-        irq: impl Peripheral<P = T::Interrupt> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         cs: impl Peripheral<P = impl GpioPin> + 'd,
         sck: impl Peripheral<P = impl GpioPin> + 'd,
         miso: impl Peripheral<P = impl GpioPin> + 'd,
@@ -63,7 +104,6 @@ impl<'d, T: Instance> Spis<'d, T> {
         into_ref!(cs, sck, miso, mosi);
         Self::new_inner(
             spis,
-            irq,
             cs.map_into(),
             sck.map_into(),
             Some(miso.map_into()),
@@ -72,49 +112,34 @@ impl<'d, T: Instance> Spis<'d, T> {
         )
     }
 
+    /// Create a new SPIS driver, capable of TX only (MISO only).
     pub fn new_txonly(
         spis: impl Peripheral<P = T> + 'd,
-        irq: impl Peripheral<P = T::Interrupt> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         cs: impl Peripheral<P = impl GpioPin> + 'd,
         sck: impl Peripheral<P = impl GpioPin> + 'd,
         miso: impl Peripheral<P = impl GpioPin> + 'd,
         config: Config,
     ) -> Self {
         into_ref!(cs, sck, miso);
-        Self::new_inner(
-            spis,
-            irq,
-            cs.map_into(),
-            sck.map_into(),
-            Some(miso.map_into()),
-            None,
-            config,
-        )
+        Self::new_inner(spis, cs.map_into(), sck.map_into(), Some(miso.map_into()), None, config)
     }
 
+    /// Create a new SPIS driver, capable of RX only (MOSI only).
     pub fn new_rxonly(
         spis: impl Peripheral<P = T> + 'd,
-        irq: impl Peripheral<P = T::Interrupt> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         cs: impl Peripheral<P = impl GpioPin> + 'd,
         sck: impl Peripheral<P = impl GpioPin> + 'd,
         mosi: impl Peripheral<P = impl GpioPin> + 'd,
         config: Config,
     ) -> Self {
         into_ref!(cs, sck, mosi);
-        Self::new_inner(
-            spis,
-            irq,
-            cs.map_into(),
-            sck.map_into(),
-            None,
-            Some(mosi.map_into()),
-            config,
-        )
+        Self::new_inner(spis, cs.map_into(), sck.map_into(), None, Some(mosi.map_into()), config)
     }
 
     fn new_inner(
         spis: impl Peripheral<P = T> + 'd,
-        irq: impl Peripheral<P = T::Interrupt> + 'd,
         cs: PeripheralRef<'d, AnyPin>,
         sck: PeripheralRef<'d, AnyPin>,
         miso: Option<PeripheralRef<'d, AnyPin>>,
@@ -123,7 +148,7 @@ impl<'d, T: Instance> Spis<'d, T> {
     ) -> Self {
         compiler_fence(Ordering::SeqCst);
 
-        into_ref!(spis, irq, cs, sck);
+        into_ref!(spis, cs, sck);
 
         let r = T::regs();
 
@@ -189,30 +214,14 @@ impl<'d, T: Instance> Spis<'d, T> {
         // Disable all events interrupts.
         r.intenclr.write(|w| unsafe { w.bits(0xFFFF_FFFF) });
 
-        irq.set_handler(Self::on_interrupt);
-        irq.unpend();
-        irq.enable();
+        T::Interrupt::unpend();
+        unsafe { T::Interrupt::enable() };
 
         Self { _p: spis }
     }
 
-    fn on_interrupt(_: *mut ()) {
-        let r = T::regs();
-        let s = T::state();
-
-        if r.events_end.read().bits() != 0 {
-            s.waker.wake();
-            r.intenclr.write(|w| w.end().clear());
-        }
-
-        if r.events_acquired.read().bits() != 0 {
-            s.waker.wake();
-            r.intenclr.write(|w| w.acquired().clear());
-        }
-    }
-
     fn prepare(&mut self, rx: *mut [u8], tx: *const [u8]) -> Result<(), Error> {
-        slice_in_ram_or(tx, Error::DMABufferNotInDataMemory)?;
+        slice_in_ram_or(tx, Error::BufferNotInRAM)?;
         // NOTE: RAM slice check for rx is not necessary, as a mutable
         // slice can only be built from data located in RAM.
 
@@ -267,7 +276,7 @@ impl<'d, T: Instance> Spis<'d, T> {
     fn blocking_inner(&mut self, rx: &mut [u8], tx: &[u8]) -> Result<(usize, usize), Error> {
         match self.blocking_inner_from_ram(rx, tx) {
             Ok(n) => Ok(n),
-            Err(Error::DMABufferNotInDataMemory) => {
+            Err(Error::BufferNotInRAM) => {
                 trace!("Copying SPIS tx buffer into RAM for DMA");
                 let tx_ram_buf = &mut [0; FORCE_COPY_BUFFER_SIZE][..tx.len()];
                 tx_ram_buf.copy_from_slice(tx);
@@ -330,7 +339,7 @@ impl<'d, T: Instance> Spis<'d, T> {
     async fn async_inner(&mut self, rx: &mut [u8], tx: &[u8]) -> Result<(usize, usize), Error> {
         match self.async_inner_from_ram(rx, tx).await {
             Ok(n) => Ok(n),
-            Err(Error::DMABufferNotInDataMemory) => {
+            Err(Error::BufferNotInRAM) => {
                 trace!("Copying SPIS tx buffer into RAM for DMA");
                 let tx_ram_buf = &mut [0; FORCE_COPY_BUFFER_SIZE][..tx.len()];
                 tx_ram_buf.copy_from_slice(tx);
@@ -468,8 +477,10 @@ pub(crate) mod sealed {
     }
 }
 
+/// SPIS peripheral instance
 pub trait Instance: Peripheral<P = Self> + sealed::Instance + 'static {
-    type Interrupt: Interrupt;
+    /// Interrupt for this peripheral.
+    type Interrupt: interrupt::typelevel::Interrupt;
 }
 
 macro_rules! impl_spis {
@@ -484,7 +495,7 @@ macro_rules! impl_spis {
             }
         }
         impl crate::spis::Instance for peripherals::$type {
-            type Interrupt = crate::interrupt::$irq;
+            type Interrupt = crate::interrupt::typelevel::$irq;
         }
     };
 }

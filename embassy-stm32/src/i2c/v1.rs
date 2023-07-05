@@ -9,7 +9,16 @@ use crate::gpio::Pull;
 use crate::i2c::{Error, Instance, SclPin, SdaPin};
 use crate::pac::i2c;
 use crate::time::Hertz;
-use crate::Peripheral;
+use crate::{interrupt, Peripheral};
+
+/// Interrupt handler.
+pub struct InterruptHandler<T: Instance> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {}
+}
 
 #[non_exhaustive]
 #[derive(Copy, Clone)]
@@ -48,7 +57,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         _peri: impl Peripheral<P = T> + 'd,
         scl: impl Peripheral<P = impl SclPin<T>> + 'd,
         sda: impl Peripheral<P = impl SdaPin<T>> + 'd,
-        _irq: impl Peripheral<P = T::Interrupt> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         tx_dma: impl Peripheral<P = TXDMA> + 'd,
         rx_dma: impl Peripheral<P = RXDMA> + 'd,
         freq: Hertz,
@@ -59,53 +68,45 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         T::enable();
         T::reset();
 
-        unsafe {
-            scl.set_as_af_pull(
-                scl.af_num(),
-                AFType::OutputOpenDrain,
-                match config.scl_pullup {
-                    true => Pull::Up,
-                    false => Pull::None,
-                },
-            );
-            sda.set_as_af_pull(
-                sda.af_num(),
-                AFType::OutputOpenDrain,
-                match config.sda_pullup {
-                    true => Pull::Up,
-                    false => Pull::None,
-                },
-            );
-        }
+        scl.set_as_af_pull(
+            scl.af_num(),
+            AFType::OutputOpenDrain,
+            match config.scl_pullup {
+                true => Pull::Up,
+                false => Pull::None,
+            },
+        );
+        sda.set_as_af_pull(
+            sda.af_num(),
+            AFType::OutputOpenDrain,
+            match config.sda_pullup {
+                true => Pull::Up,
+                false => Pull::None,
+            },
+        );
 
-        unsafe {
-            T::regs().cr1().modify(|reg| {
-                reg.set_pe(false);
-                //reg.set_anfoff(false);
-            });
-        }
+        T::regs().cr1().modify(|reg| {
+            reg.set_pe(false);
+            //reg.set_anfoff(false);
+        });
 
         let timings = Timings::new(T::frequency(), freq.into());
 
-        unsafe {
-            T::regs().cr2().modify(|reg| {
-                reg.set_freq(timings.freq);
-            });
-            T::regs().ccr().modify(|reg| {
-                reg.set_f_s(timings.mode.f_s());
-                reg.set_duty(timings.duty.duty());
-                reg.set_ccr(timings.ccr);
-            });
-            T::regs().trise().modify(|reg| {
-                reg.set_trise(timings.trise);
-            });
-        }
+        T::regs().cr2().modify(|reg| {
+            reg.set_freq(timings.freq);
+        });
+        T::regs().ccr().modify(|reg| {
+            reg.set_f_s(timings.mode.f_s());
+            reg.set_duty(timings.duty.duty());
+            reg.set_ccr(timings.ccr);
+        });
+        T::regs().trise().modify(|reg| {
+            reg.set_trise(timings.trise);
+        });
 
-        unsafe {
-            T::regs().cr1().modify(|reg| {
-                reg.set_pe(true);
-            });
-        }
+        T::regs().cr1().modify(|reg| {
+            reg.set_pe(true);
+        });
 
         Self {
             phantom: PhantomData,
@@ -114,7 +115,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         }
     }
 
-    unsafe fn check_and_clear_error_flags(&self) -> Result<i2c::regs::Sr1, Error> {
+    fn check_and_clear_error_flags(&self) -> Result<i2c::regs::Sr1, Error> {
         // Note that flags should only be cleared once they have been registered. If flags are
         // cleared otherwise, there may be an inherent race condition and flags may be missed.
         let sr1 = T::regs().sr1().read();
@@ -153,7 +154,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         Ok(sr1)
     }
 
-    unsafe fn write_bytes(
+    fn write_bytes(
         &mut self,
         addr: u8,
         bytes: &[u8],
@@ -202,7 +203,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         Ok(())
     }
 
-    unsafe fn send_byte(&self, byte: u8, check_timeout: impl Fn() -> Result<(), Error>) -> Result<(), Error> {
+    fn send_byte(&self, byte: u8, check_timeout: impl Fn() -> Result<(), Error>) -> Result<(), Error> {
         // Wait until we're ready for sending
         while {
             // Check for any I2C errors. If a NACK occurs, the ADDR bit will never be set.
@@ -225,7 +226,7 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         Ok(())
     }
 
-    unsafe fn recv_byte(&self, check_timeout: impl Fn() -> Result<(), Error>) -> Result<u8, Error> {
+    fn recv_byte(&self, check_timeout: impl Fn() -> Result<(), Error>) -> Result<u8, Error> {
         while {
             // Check for any potential error conditions.
             self.check_and_clear_error_flags()?;
@@ -247,56 +248,52 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
     ) -> Result<(), Error> {
         if let Some((last, buffer)) = buffer.split_last_mut() {
             // Send a START condition and set ACK bit
-            unsafe {
-                T::regs().cr1().modify(|reg| {
-                    reg.set_start(true);
-                    reg.set_ack(true);
-                });
-            }
+            T::regs().cr1().modify(|reg| {
+                reg.set_start(true);
+                reg.set_ack(true);
+            });
 
             // Wait until START condition was generated
-            while unsafe { !self.check_and_clear_error_flags()?.start() } {
+            while !self.check_and_clear_error_flags()?.start() {
                 check_timeout()?;
             }
 
             // Also wait until signalled we're master and everything is waiting for us
             while {
-                let sr2 = unsafe { T::regs().sr2().read() };
+                let sr2 = T::regs().sr2().read();
                 !sr2.msl() && !sr2.busy()
             } {
                 check_timeout()?;
             }
 
             // Set up current address, we're trying to talk to
-            unsafe { T::regs().dr().write(|reg| reg.set_dr((addr << 1) + 1)) }
+            T::regs().dr().write(|reg| reg.set_dr((addr << 1) + 1));
 
             // Wait until address was sent
             // Wait for the address to be acknowledged
-            while unsafe { !self.check_and_clear_error_flags()?.addr() } {
+            while !self.check_and_clear_error_flags()?.addr() {
                 check_timeout()?;
             }
 
             // Clear condition by reading SR2
-            let _ = unsafe { T::regs().sr2().read() };
+            let _ = T::regs().sr2().read();
 
             // Receive bytes into buffer
             for c in buffer {
-                *c = unsafe { self.recv_byte(&check_timeout)? };
+                *c = self.recv_byte(&check_timeout)?;
             }
 
             // Prepare to send NACK then STOP after next byte
-            unsafe {
-                T::regs().cr1().modify(|reg| {
-                    reg.set_ack(false);
-                    reg.set_stop(true);
-                })
-            }
+            T::regs().cr1().modify(|reg| {
+                reg.set_ack(false);
+                reg.set_stop(true);
+            });
 
             // Receive last byte
-            *last = unsafe { self.recv_byte(&check_timeout)? };
+            *last = self.recv_byte(&check_timeout)?;
 
             // Wait for the STOP to be sent.
-            while unsafe { T::regs().cr1().read().stop() } {
+            while T::regs().cr1().read().stop() {
                 check_timeout()?;
             }
 
@@ -307,73 +304,71 @@ impl<'d, T: Instance, TXDMA, RXDMA> I2c<'d, T, TXDMA, RXDMA> {
         }
     }
 
-    pub fn blocking_read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Error> {
-        self.blocking_read_timeout(addr, buffer, || Ok(()))
+    pub fn blocking_read(&mut self, addr: u8, read: &mut [u8]) -> Result<(), Error> {
+        self.blocking_read_timeout(addr, read, || Ok(()))
     }
 
     pub fn blocking_write_timeout(
         &mut self,
         addr: u8,
-        bytes: &[u8],
+        write: &[u8],
         check_timeout: impl Fn() -> Result<(), Error>,
     ) -> Result<(), Error> {
-        unsafe {
-            self.write_bytes(addr, bytes, &check_timeout)?;
-            // Send a STOP condition
-            T::regs().cr1().modify(|reg| reg.set_stop(true));
-            // Wait for STOP condition to transmit.
-            while T::regs().cr1().read().stop() {
-                check_timeout()?;
-            }
-        };
+        self.write_bytes(addr, write, &check_timeout)?;
+        // Send a STOP condition
+        T::regs().cr1().modify(|reg| reg.set_stop(true));
+        // Wait for STOP condition to transmit.
+        while T::regs().cr1().read().stop() {
+            check_timeout()?;
+        }
 
         // Fallthrough is success
         Ok(())
     }
 
-    pub fn blocking_write(&mut self, addr: u8, bytes: &[u8]) -> Result<(), Error> {
-        self.blocking_write_timeout(addr, bytes, || Ok(()))
+    pub fn blocking_write(&mut self, addr: u8, write: &[u8]) -> Result<(), Error> {
+        self.blocking_write_timeout(addr, write, || Ok(()))
     }
 
     pub fn blocking_write_read_timeout(
         &mut self,
         addr: u8,
-        bytes: &[u8],
-        buffer: &mut [u8],
+        write: &[u8],
+        read: &mut [u8],
         check_timeout: impl Fn() -> Result<(), Error>,
     ) -> Result<(), Error> {
-        unsafe { self.write_bytes(addr, bytes, &check_timeout)? };
-        self.blocking_read_timeout(addr, buffer, &check_timeout)?;
+        self.write_bytes(addr, write, &check_timeout)?;
+        self.blocking_read_timeout(addr, read, &check_timeout)?;
 
         Ok(())
     }
 
-    pub fn blocking_write_read(&mut self, addr: u8, bytes: &[u8], buffer: &mut [u8]) -> Result<(), Error> {
-        self.blocking_write_read_timeout(addr, bytes, buffer, || Ok(()))
+    pub fn blocking_write_read(&mut self, addr: u8, write: &[u8], read: &mut [u8]) -> Result<(), Error> {
+        self.blocking_write_read_timeout(addr, write, read, || Ok(()))
     }
 }
 
 impl<'d, T: Instance> embedded_hal_02::blocking::i2c::Read for I2c<'d, T> {
     type Error = Error;
 
-    fn read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
-        self.blocking_read(addr, buffer)
+    fn read(&mut self, addr: u8, read: &mut [u8]) -> Result<(), Self::Error> {
+        self.blocking_read(addr, read)
     }
 }
 
 impl<'d, T: Instance> embedded_hal_02::blocking::i2c::Write for I2c<'d, T> {
     type Error = Error;
 
-    fn write(&mut self, addr: u8, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.blocking_write(addr, bytes)
+    fn write(&mut self, addr: u8, write: &[u8]) -> Result<(), Self::Error> {
+        self.blocking_write(addr, write)
     }
 }
 
 impl<'d, T: Instance> embedded_hal_02::blocking::i2c::WriteRead for I2c<'d, T> {
     type Error = Error;
 
-    fn write_read(&mut self, addr: u8, bytes: &[u8], buffer: &mut [u8]) -> Result<(), Self::Error> {
-        self.blocking_write_read(addr, bytes, buffer)
+    fn write_read(&mut self, addr: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
+        self.blocking_write_read(addr, write, read)
     }
 }
 
@@ -402,44 +397,23 @@ mod eh1 {
     }
 
     impl<'d, T: Instance> embedded_hal_1::i2c::I2c for I2c<'d, T> {
-        fn read(&mut self, address: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
-            self.blocking_read(address, buffer)
+        fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
+            self.blocking_read(address, read)
         }
 
-        fn write(&mut self, address: u8, buffer: &[u8]) -> Result<(), Self::Error> {
-            self.blocking_write(address, buffer)
+        fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
+            self.blocking_write(address, write)
         }
 
-        fn write_iter<B>(&mut self, _address: u8, _bytes: B) -> Result<(), Self::Error>
-        where
-            B: IntoIterator<Item = u8>,
-        {
-            todo!();
+        fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
+            self.blocking_write_read(address, write, read)
         }
 
-        fn write_iter_read<B>(&mut self, _address: u8, _bytes: B, _buffer: &mut [u8]) -> Result<(), Self::Error>
-        where
-            B: IntoIterator<Item = u8>,
-        {
-            todo!();
-        }
-
-        fn write_read(&mut self, address: u8, wr_buffer: &[u8], rd_buffer: &mut [u8]) -> Result<(), Self::Error> {
-            self.blocking_write_read(address, wr_buffer, rd_buffer)
-        }
-
-        fn transaction<'a>(
+        fn transaction(
             &mut self,
             _address: u8,
-            _operations: &mut [embedded_hal_1::i2c::Operation<'a>],
+            _operations: &mut [embedded_hal_1::i2c::Operation<'_>],
         ) -> Result<(), Self::Error> {
-            todo!();
-        }
-
-        fn transaction_iter<'a, O>(&mut self, _address: u8, _operations: O) -> Result<(), Self::Error>
-        where
-            O: IntoIterator<Item = embedded_hal_1::i2c::Operation<'a>>,
-        {
             todo!();
         }
     }
@@ -490,8 +464,6 @@ impl Timings {
         assert!(freq >= 2 && freq <= 50);
 
         // Configure bus frequency into I2C peripheral
-        //self.i2c.cr2.write(|w| unsafe { w.freq().bits(freq as u8) });
-
         let trise = if speed <= 100_000 {
             freq + 1
         } else {
@@ -551,18 +523,16 @@ impl<'d, T: Instance> SetConfig for I2c<'d, T> {
     type Config = Hertz;
     fn set_config(&mut self, config: &Self::Config) {
         let timings = Timings::new(T::frequency(), *config);
-        unsafe {
-            T::regs().cr2().modify(|reg| {
-                reg.set_freq(timings.freq);
-            });
-            T::regs().ccr().modify(|reg| {
-                reg.set_f_s(timings.mode.f_s());
-                reg.set_duty(timings.duty.duty());
-                reg.set_ccr(timings.ccr);
-            });
-            T::regs().trise().modify(|reg| {
-                reg.set_trise(timings.trise);
-            });
-        }
+        T::regs().cr2().modify(|reg| {
+            reg.set_freq(timings.freq);
+        });
+        T::regs().ccr().modify(|reg| {
+            reg.set_f_s(timings.mode.f_s());
+            reg.set_duty(timings.duty.duty());
+            reg.set_ccr(timings.ccr);
+        });
+        T::regs().trise().modify(|reg| {
+            reg.set_trise(timings.trise);
+        });
     }
 }

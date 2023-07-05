@@ -1,8 +1,11 @@
+/// Peripheral Access Crate
 #[allow(unused_imports)]
 #[rustfmt::skip]
 pub mod pac {
     // The nRF9160 has a secure and non-secure (NS) mode.
     // To avoid cfg spam, we remove _ns or _s suffixes here.
+
+    pub use nrf9160_pac::NVIC_PRIO_BITS;
 
     #[doc(no_inline)]
     pub use nrf9160_pac::{
@@ -178,10 +181,10 @@ embassy_hal_common::peripherals! {
     NVMC,
 
     // UARTE, TWI & SPI
-    UARTETWISPI0,
-    UARTETWISPI1,
-    UARTETWISPI2,
-    UARTETWISPI3,
+    SERIAL0,
+    SERIAL1,
+    SERIAL2,
+    SERIAL3,
 
     // SAADC
     SAADC,
@@ -270,35 +273,37 @@ embassy_hal_common::peripherals! {
     PDM,
 }
 
-impl_uarte!(UARTETWISPI0, UARTE0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
-impl_uarte!(UARTETWISPI1, UARTE1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
-impl_uarte!(UARTETWISPI2, UARTE2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
-impl_uarte!(UARTETWISPI3, UARTE3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
+impl_uarte!(SERIAL0, UARTE0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
+impl_uarte!(SERIAL1, UARTE1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
+impl_uarte!(SERIAL2, UARTE2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
+impl_uarte!(SERIAL3, UARTE3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
 
-impl_spim!(UARTETWISPI0, SPIM0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
-impl_spim!(UARTETWISPI1, SPIM1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
-impl_spim!(UARTETWISPI2, SPIM2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
-impl_spim!(UARTETWISPI3, SPIM3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
+impl_spim!(SERIAL0, SPIM0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
+impl_spim!(SERIAL1, SPIM1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
+impl_spim!(SERIAL2, SPIM2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
+impl_spim!(SERIAL3, SPIM3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
 
-impl_spis!(UARTETWISPI0, SPIS0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
-impl_spis!(UARTETWISPI1, SPIS1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
-impl_spis!(UARTETWISPI2, SPIS2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
-impl_spis!(UARTETWISPI3, SPIS3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
+impl_spis!(SERIAL0, SPIS0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
+impl_spis!(SERIAL1, SPIS1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
+impl_spis!(SERIAL2, SPIS2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
+impl_spis!(SERIAL3, SPIS3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
 
-impl_twim!(UARTETWISPI0, TWIM0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
-impl_twim!(UARTETWISPI1, TWIM1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
-impl_twim!(UARTETWISPI2, TWIM2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
-impl_twim!(UARTETWISPI3, TWIM3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
+impl_twim!(SERIAL0, TWIM0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
+impl_twim!(SERIAL1, TWIM1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
+impl_twim!(SERIAL2, TWIM2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
+impl_twim!(SERIAL3, TWIM3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
 
-impl_twis!(UARTETWISPI0, TWIS0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
-impl_twis!(UARTETWISPI1, TWIS1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
-impl_twis!(UARTETWISPI2, TWIS2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
-impl_twis!(UARTETWISPI3, TWIS3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
+impl_twis!(SERIAL0, TWIS0, UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
+impl_twis!(SERIAL1, TWIS1, UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
+impl_twis!(SERIAL2, TWIS2, UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
+impl_twis!(SERIAL3, TWIS3, UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
 
 impl_pwm!(PWM0, PWM0, PWM0);
 impl_pwm!(PWM1, PWM1, PWM1);
 impl_pwm!(PWM2, PWM2, PWM2);
 impl_pwm!(PWM3, PWM3, PWM3);
+
+impl_pdm!(PDM, PDM, PDM);
 
 impl_timer!(TIMER0, TIMER0, TIMER0);
 impl_timer!(TIMER1, TIMER1, TIMER1);
@@ -363,40 +368,36 @@ impl_saadc_input!(P0_18, ANALOG_INPUT5);
 impl_saadc_input!(P0_19, ANALOG_INPUT6);
 impl_saadc_input!(P0_20, ANALOG_INPUT7);
 
-pub mod irqs {
-    use embassy_cortex_m::interrupt::_export::declare;
-
-    use crate::pac::Interrupt as InterruptEnum;
-
-    declare!(SPU);
-    declare!(CLOCK_POWER);
-    declare!(UARTE0_SPIM0_SPIS0_TWIM0_TWIS0);
-    declare!(UARTE1_SPIM1_SPIS1_TWIM1_TWIS1);
-    declare!(UARTE2_SPIM2_SPIS2_TWIM2_TWIS2);
-    declare!(UARTE3_SPIM3_SPIS3_TWIM3_TWIS3);
-    declare!(GPIOTE0);
-    declare!(SAADC);
-    declare!(TIMER0);
-    declare!(TIMER1);
-    declare!(TIMER2);
-    declare!(RTC0);
-    declare!(RTC1);
-    declare!(WDT);
-    declare!(EGU0);
-    declare!(EGU1);
-    declare!(EGU2);
-    declare!(EGU3);
-    declare!(EGU4);
-    declare!(EGU5);
-    declare!(PWM0);
-    declare!(PWM1);
-    declare!(PWM2);
-    declare!(PDM);
-    declare!(PWM3);
-    declare!(I2S);
-    declare!(IPC);
-    declare!(FPU);
-    declare!(GPIOTE1);
-    declare!(KMU);
-    declare!(CRYPTOCELL);
-}
+embassy_hal_common::interrupt_mod!(
+    SPU,
+    CLOCK_POWER,
+    UARTE0_SPIM0_SPIS0_TWIM0_TWIS0,
+    UARTE1_SPIM1_SPIS1_TWIM1_TWIS1,
+    UARTE2_SPIM2_SPIS2_TWIM2_TWIS2,
+    UARTE3_SPIM3_SPIS3_TWIM3_TWIS3,
+    GPIOTE0,
+    SAADC,
+    TIMER0,
+    TIMER1,
+    TIMER2,
+    RTC0,
+    RTC1,
+    WDT,
+    EGU0,
+    EGU1,
+    EGU2,
+    EGU3,
+    EGU4,
+    EGU5,
+    PWM0,
+    PWM1,
+    PWM2,
+    PDM,
+    PWM3,
+    I2S,
+    IPC,
+    FPU,
+    GPIOTE1,
+    KMU,
+    CRYPTOCELL,
+);

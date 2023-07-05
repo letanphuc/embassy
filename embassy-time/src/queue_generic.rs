@@ -2,8 +2,7 @@ use core::cell::RefCell;
 use core::cmp::{min, Ordering};
 use core::task::Waker;
 
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::blocking_mutex::Mutex;
+use critical_section::Mutex;
 use heapless::Vec;
 
 use crate::driver::{allocate_alarm, set_alarm, set_alarm_callback, AlarmHandle};
@@ -17,7 +16,7 @@ const QUEUE_SIZE: usize = 16;
 #[cfg(feature = "generic-queue-32")]
 const QUEUE_SIZE: usize = 32;
 #[cfg(feature = "generic-queue-64")]
-const QUEUE_SIZE: usize = 32;
+const QUEUE_SIZE: usize = 64;
 #[cfg(feature = "generic-queue-128")]
 const QUEUE_SIZE: usize = 128;
 #[cfg(not(any(
@@ -65,7 +64,7 @@ impl InnerQueue {
         self.queue
             .iter_mut()
             .find(|timer| timer.waker.will_wake(waker))
-            .map(|mut timer| {
+            .map(|timer| {
                 timer.at = min(timer.at, at);
             })
             .unwrap_or_else(|| {
@@ -129,7 +128,7 @@ impl InnerQueue {
 }
 
 struct Queue {
-    inner: Mutex<CriticalSectionRawMutex, RefCell<Option<InnerQueue>>>,
+    inner: Mutex<RefCell<Option<InnerQueue>>>,
 }
 
 impl Queue {
@@ -140,8 +139,8 @@ impl Queue {
     }
 
     fn schedule_wake(&'static self, at: Instant, waker: &Waker) {
-        self.inner.lock(|inner| {
-            let mut inner = inner.borrow_mut();
+        critical_section::with(|cs| {
+            let mut inner = self.inner.borrow_ref_mut(cs);
 
             if inner.is_none() {}
 
@@ -159,8 +158,7 @@ impl Queue {
     }
 
     fn handle_alarm(&self) {
-        self.inner
-            .lock(|inner| inner.borrow_mut().as_mut().unwrap().handle_alarm());
+        critical_section::with(|cs| self.inner.borrow_ref_mut(cs).as_mut().unwrap().handle_alarm())
     }
 
     fn handle_alarm_callback(ctx: *mut ()) {
@@ -185,7 +183,6 @@ mod tests {
 
     use serial_test::serial;
 
-    use super::InnerQueue;
     use crate::driver::{AlarmHandle, Driver};
     use crate::queue_generic::QUEUE;
     use crate::Instant;
@@ -319,14 +316,18 @@ mod tests {
 
     fn setup() {
         DRIVER.reset();
-
-        QUEUE.inner.lock(|inner| {
-            *inner.borrow_mut() = InnerQueue::new();
-        });
+        critical_section::with(|cs| *QUEUE.inner.borrow_ref_mut(cs) = None);
     }
 
     fn queue_len() -> usize {
-        QUEUE.inner.lock(|inner| inner.borrow().queue.iter().count())
+        critical_section::with(|cs| {
+            QUEUE
+                .inner
+                .borrow_ref(cs)
+                .as_ref()
+                .map(|inner| inner.queue.iter().count())
+                .unwrap_or(0)
+        })
     }
 
     #[test]

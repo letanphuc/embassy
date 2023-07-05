@@ -25,11 +25,11 @@ fn cpu_regs() -> pac::exti::Exti {
     EXTI
 }
 
-#[cfg(not(any(exti_g0, exti_l5, gpio_v1, exti_u5)))]
+#[cfg(not(any(exti_c0, exti_g0, exti_l5, gpio_v1, exti_u5, exti_h5, exti_h50)))]
 fn exticr_regs() -> pac::syscfg::Syscfg {
     pac::SYSCFG
 }
-#[cfg(any(exti_g0, exti_l5, exti_u5))]
+#[cfg(any(exti_c0, exti_g0, exti_l5, exti_u5, exti_h5, exti_h50))]
 fn exticr_regs() -> pac::exti::Exti {
     EXTI
 }
@@ -39,9 +39,9 @@ fn exticr_regs() -> pac::afio::Afio {
 }
 
 pub unsafe fn on_irq() {
-    #[cfg(not(any(exti_g0, exti_l5, exti_u5)))]
+    #[cfg(not(any(exti_c0, exti_g0, exti_l5, exti_u5, exti_h5, exti_h50)))]
     let bits = EXTI.pr(0).read().0;
-    #[cfg(any(exti_g0, exti_l5, exti_u5))]
+    #[cfg(any(exti_c0, exti_g0, exti_l5, exti_u5, exti_h5, exti_h50))]
     let bits = EXTI.rpr(0).read().0 | EXTI.fpr(0).read().0;
 
     // Mask all the channels that fired.
@@ -53,9 +53,9 @@ pub unsafe fn on_irq() {
     }
 
     // Clear pending
-    #[cfg(not(any(exti_g0, exti_l5, exti_u5)))]
+    #[cfg(not(any(exti_c0, exti_g0, exti_l5, exti_u5, exti_h5, exti_h50)))]
     EXTI.pr(0).write_value(Lines(bits));
-    #[cfg(any(exti_g0, exti_l5, exti_u5))]
+    #[cfg(any(exti_c0, exti_g0, exti_l5, exti_u5, exti_h5, exti_h50))]
     {
         EXTI.rpr(0).write_value(Lines(bits));
         EXTI.fpr(0).write_value(Lines(bits));
@@ -198,6 +198,7 @@ mod eha {
     }
 }
 
+#[must_use = "futures do nothing unless you `.await` or poll them"]
 struct ExtiInputFuture<'a> {
     pin: u8,
     phantom: PhantomData<&'a mut AnyPin>,
@@ -205,16 +206,16 @@ struct ExtiInputFuture<'a> {
 
 impl<'a> ExtiInputFuture<'a> {
     fn new(pin: u8, port: u8, rising: bool, falling: bool) -> Self {
-        critical_section::with(|_| unsafe {
+        critical_section::with(|_| {
             let pin = pin as usize;
             exticr_regs().exticr(pin / 4).modify(|w| w.set_exti(pin % 4, port));
             EXTI.rtsr(0).modify(|w| w.set_line(pin, rising));
             EXTI.ftsr(0).modify(|w| w.set_line(pin, falling));
 
             // clear pending bit
-            #[cfg(not(any(exti_g0, exti_l5, exti_u5)))]
+            #[cfg(not(any(exti_c0, exti_g0, exti_l5, exti_u5, exti_h5, exti_h50)))]
             EXTI.pr(0).write(|w| w.set_line(pin, true));
-            #[cfg(any(exti_g0, exti_l5, exti_u5))]
+            #[cfg(any(exti_c0, exti_g0, exti_l5, exti_u5, exti_h5, exti_h50))]
             {
                 EXTI.rpr(0).write(|w| w.set_line(pin, true));
                 EXTI.fpr(0).write(|w| w.set_line(pin, true));
@@ -232,7 +233,7 @@ impl<'a> ExtiInputFuture<'a> {
 
 impl<'a> Drop for ExtiInputFuture<'a> {
     fn drop(&mut self) {
-        critical_section::with(|_| unsafe {
+        critical_section::with(|_| {
             let pin = self.pin as _;
             cpu_regs().imr(0).modify(|w| w.set_line(pin, false));
         });
@@ -245,7 +246,7 @@ impl<'a> Future for ExtiInputFuture<'a> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         EXTI_WAKERS[self.pin as usize].register(cx.waker());
 
-        let imr = unsafe { cpu_regs().imr(0).read() };
+        let imr = cpu_regs().imr(0).read();
         if !imr.line(self.pin as _) {
             Poll::Ready(())
         } else {
@@ -290,6 +291,7 @@ macro_rules! foreach_exti_irq {
 
 macro_rules! impl_irq {
     ($e:ident) => {
+        #[cfg(feature = "rt")]
         #[interrupt]
         unsafe fn $e() {
             on_irq()
@@ -353,17 +355,17 @@ impl_exti!(EXTI15, 15);
 
 macro_rules! enable_irq {
     ($e:ident) => {
-        crate::interrupt::$e::steal().enable();
+        crate::interrupt::typelevel::$e::enable();
     };
 }
 
 /// safety: must be called only once
 pub(crate) unsafe fn init() {
-    use crate::interrupt::{Interrupt, InterruptExt};
+    use crate::interrupt::typelevel::Interrupt;
 
     foreach_exti_irq!(enable_irq);
 
-    #[cfg(not(any(rcc_wb, rcc_wl5, rcc_wle, stm32f1)))]
+    #[cfg(not(any(rcc_wb, rcc_wl5, rcc_wle, stm32f1, exti_h5, exti_h50)))]
     <crate::peripherals::SYSCFG as crate::rcc::sealed::RccPeripheral>::enable();
     #[cfg(stm32f1)]
     <crate::peripherals::AFIO as crate::rcc::sealed::RccPeripheral>::enable();
