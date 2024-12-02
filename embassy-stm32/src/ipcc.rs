@@ -1,13 +1,14 @@
+//! Inter-Process Communication Controller (IPCC)
+
 use core::future::poll_fn;
+use core::sync::atomic::{compiler_fence, Ordering};
 use core::task::Poll;
 
-use atomic_polyfill::{compiler_fence, Ordering};
+use embassy_sync::waitqueue::AtomicWaker;
 
-use self::sealed::Instance;
-use crate::interrupt;
 use crate::interrupt::typelevel::Interrupt;
 use crate::peripherals::IPCC;
-use crate::rcc::sealed::RccPeripheral;
+use crate::{interrupt, rcc};
 
 /// Interrupt handler.
 pub struct ReceiveInterruptHandler {}
@@ -41,6 +42,7 @@ impl interrupt::typelevel::Handler<interrupt::typelevel::IPCC_C1_RX> for Receive
     }
 }
 
+/// TX interrupt handler.
 pub struct TransmitInterruptHandler {}
 
 impl interrupt::typelevel::Handler<interrupt::typelevel::IPCC_C1_TX> for TransmitInterruptHandler {
@@ -72,6 +74,7 @@ impl interrupt::typelevel::Handler<interrupt::typelevel::IPCC_C1_TX> for Transmi
     }
 }
 
+/// IPCC config.
 #[non_exhaustive]
 #[derive(Clone, Copy, Default)]
 pub struct Config {
@@ -79,6 +82,8 @@ pub struct Config {
     // reserved for future use
 }
 
+/// Channel.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub enum IpccChannel {
@@ -90,15 +95,17 @@ pub enum IpccChannel {
     Channel6 = 5,
 }
 
+/// IPCC driver.
 pub struct Ipcc;
 
 impl Ipcc {
+    /// Enable IPCC.
     pub fn enable(_config: Config) {
-        IPCC::enable();
-        IPCC::reset();
+        rcc::enable_and_reset::<IPCC>();
         IPCC::set_cpu2(true);
 
-        _configure_pwr();
+        // set RF wake-up clock = LSE
+        crate::pac::RCC.csr().modify(|w| w.set_rfwkpsel(0b01));
 
         let regs = IPCC::regs();
 
@@ -200,7 +207,7 @@ impl Ipcc {
     }
 }
 
-impl sealed::Instance for crate::peripherals::IPCC {
+impl SealedInstance for crate::peripherals::IPCC {
     fn regs() -> crate::pac::ipcc::Ipcc {
         crate::pac::IPCC
     }
@@ -209,127 +216,50 @@ impl sealed::Instance for crate::peripherals::IPCC {
         crate::pac::PWR.cr4().modify(|w| w.set_c2boot(enabled));
     }
 
-    fn state() -> &'static self::sealed::State {
-        static STATE: self::sealed::State = self::sealed::State::new();
+    fn state() -> &'static State {
+        static STATE: State = State::new();
         &STATE
     }
 }
 
-pub(crate) mod sealed {
-    use embassy_sync::waitqueue::AtomicWaker;
+struct State {
+    rx_wakers: [AtomicWaker; 6],
+    tx_wakers: [AtomicWaker; 6],
+}
 
-    use super::*;
-
-    pub struct State {
-        rx_wakers: [AtomicWaker; 6],
-        tx_wakers: [AtomicWaker; 6],
-    }
-
-    impl State {
-        pub const fn new() -> Self {
-            const WAKER: AtomicWaker = AtomicWaker::new();
-
-            Self {
-                rx_wakers: [WAKER; 6],
-                tx_wakers: [WAKER; 6],
-            }
-        }
-
-        pub const fn rx_waker_for(&self, channel: IpccChannel) -> &AtomicWaker {
-            match channel {
-                IpccChannel::Channel1 => &self.rx_wakers[0],
-                IpccChannel::Channel2 => &self.rx_wakers[1],
-                IpccChannel::Channel3 => &self.rx_wakers[2],
-                IpccChannel::Channel4 => &self.rx_wakers[3],
-                IpccChannel::Channel5 => &self.rx_wakers[4],
-                IpccChannel::Channel6 => &self.rx_wakers[5],
-            }
-        }
-
-        pub const fn tx_waker_for(&self, channel: IpccChannel) -> &AtomicWaker {
-            match channel {
-                IpccChannel::Channel1 => &self.tx_wakers[0],
-                IpccChannel::Channel2 => &self.tx_wakers[1],
-                IpccChannel::Channel3 => &self.tx_wakers[2],
-                IpccChannel::Channel4 => &self.tx_wakers[3],
-                IpccChannel::Channel5 => &self.tx_wakers[4],
-                IpccChannel::Channel6 => &self.tx_wakers[5],
-            }
+impl State {
+    const fn new() -> Self {
+        Self {
+            rx_wakers: [const { AtomicWaker::new() }; 6],
+            tx_wakers: [const { AtomicWaker::new() }; 6],
         }
     }
 
-    pub trait Instance: crate::rcc::RccPeripheral {
-        fn regs() -> crate::pac::ipcc::Ipcc;
-        fn set_cpu2(enabled: bool);
-        fn state() -> &'static State;
+    const fn rx_waker_for(&self, channel: IpccChannel) -> &AtomicWaker {
+        match channel {
+            IpccChannel::Channel1 => &self.rx_wakers[0],
+            IpccChannel::Channel2 => &self.rx_wakers[1],
+            IpccChannel::Channel3 => &self.rx_wakers[2],
+            IpccChannel::Channel4 => &self.rx_wakers[3],
+            IpccChannel::Channel5 => &self.rx_wakers[4],
+            IpccChannel::Channel6 => &self.rx_wakers[5],
+        }
+    }
+
+    const fn tx_waker_for(&self, channel: IpccChannel) -> &AtomicWaker {
+        match channel {
+            IpccChannel::Channel1 => &self.tx_wakers[0],
+            IpccChannel::Channel2 => &self.tx_wakers[1],
+            IpccChannel::Channel3 => &self.tx_wakers[2],
+            IpccChannel::Channel4 => &self.tx_wakers[3],
+            IpccChannel::Channel5 => &self.tx_wakers[4],
+            IpccChannel::Channel6 => &self.tx_wakers[5],
+        }
     }
 }
 
-fn _configure_pwr() {
-    // TODO: move this to RCC
-
-    let pwr = crate::pac::PWR;
-    let rcc = crate::pac::RCC;
-
-    rcc.cfgr().modify(|w| w.set_stopwuck(true));
-
-    pwr.cr1().modify(|w| w.set_dbp(true));
-    pwr.cr1().modify(|w| w.set_dbp(true));
-
-    // configure LSE
-    rcc.bdcr().modify(|w| w.set_lseon(true));
-
-    // select system clock source = PLL
-    // set PLL coefficients
-    // m: 2,
-    // n: 12,
-    // r: 3,
-    // q: 4,
-    // p: 3,
-    let src_bits = 0b11;
-    let pllp = (3 - 1) & 0b11111;
-    let pllq = (4 - 1) & 0b111;
-    let pllr = (3 - 1) & 0b111;
-    let plln = 12 & 0b1111111;
-    let pllm = (2 - 1) & 0b111;
-    rcc.pllcfgr().modify(|w| {
-        w.set_pllsrc(src_bits);
-        w.set_pllm(pllm);
-        w.set_plln(plln);
-        w.set_pllr(pllr);
-        w.set_pllp(pllp);
-        w.set_pllpen(true);
-        w.set_pllq(pllq);
-        w.set_pllqen(true);
-    });
-    // enable PLL
-    rcc.cr().modify(|w| w.set_pllon(true));
-    rcc.cr().write(|w| w.set_hsion(false));
-    // while !rcc.cr().read().pllrdy() {}
-
-    // configure SYSCLK mux to use PLL clocl
-    rcc.cfgr().modify(|w| w.set_sw(0b11));
-
-    // configure CPU1 & CPU2 dividers
-    rcc.cfgr().modify(|w| w.set_hpre(0)); // not divided
-    rcc.extcfgr().modify(|w| {
-        w.set_c2hpre(0b1000); // div2
-        w.set_shdhpre(0); // not divided
-    });
-
-    // apply APB1 / APB2 values
-    rcc.cfgr().modify(|w| {
-        w.set_ppre1(0b000); // not divided
-        w.set_ppre2(0b000); // not divided
-    });
-
-    // TODO: required
-    // set RF wake-up clock = LSE
-    rcc.csr().modify(|w| w.set_rfwkpsel(0b01));
-
-    // set LPTIM1 & LPTIM2 clock source
-    rcc.ccipr().modify(|w| {
-        w.set_lptim1sel(0b00); // PCLK
-        w.set_lptim2sel(0b00); // PCLK
-    });
+trait SealedInstance: crate::rcc::RccPeripheral {
+    fn regs() -> crate::pac::ipcc::Ipcc;
+    fn set_cpu2(enabled: bool);
+    fn state() -> &'static State;
 }

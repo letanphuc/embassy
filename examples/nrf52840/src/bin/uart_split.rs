@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
@@ -14,7 +13,7 @@ use {defmt_rtt as _, panic_probe as _};
 static CHANNEL: Channel<ThreadModeRawMutex, [u8; 8], 1> = Channel::new();
 
 bind_interrupts!(struct Irqs {
-    UARTE0_UART0 => uarte::InterruptHandler<UARTE0>;
+    UARTE0 => uarte::InterruptHandler<UARTE0>;
 });
 
 #[embassy_executor::main]
@@ -46,7 +45,7 @@ async fn main(spawner: Spawner) {
     // back out the buffer we receive from the read
     // task.
     loop {
-        let buf = CHANNEL.recv().await;
+        let buf = CHANNEL.receive().await;
         info!("writing...");
         unwrap!(tx.write(&buf).await);
     }

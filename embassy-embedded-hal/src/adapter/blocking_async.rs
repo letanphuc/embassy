@@ -1,4 +1,4 @@
-use embedded_hal_02::{blocking, serial};
+use embedded_hal_02::blocking;
 
 /// Wrapper that implements async traits using blocking implementations.
 ///
@@ -103,18 +103,11 @@ where
     }
 }
 
-// Uart implementatinos
-impl<T, E> embedded_hal_1::serial::ErrorType for BlockingAsync<T>
-where
-    T: serial::Read<u8, Error = E>,
-    E: embedded_hal_1::serial::Error + 'static,
-{
-    type Error = E;
-}
-
 /// NOR flash wrapper
-use embedded_storage::nor_flash::{ErrorType, NorFlash, ReadNorFlash};
-use embedded_storage_async::nor_flash::{NorFlash as AsyncNorFlash, ReadNorFlash as AsyncReadNorFlash};
+use embedded_storage::nor_flash::{ErrorType, MultiwriteNorFlash, NorFlash, ReadNorFlash};
+use embedded_storage_async::nor_flash::{
+    MultiwriteNorFlash as AsyncMultiwriteNorFlash, NorFlash as AsyncNorFlash, ReadNorFlash as AsyncReadNorFlash,
+};
 
 impl<T> ErrorType for BlockingAsync<T>
 where
@@ -152,3 +145,5 @@ where
         self.wrapped.capacity()
     }
 }
+
+impl<T> AsyncMultiwriteNorFlash for BlockingAsync<T> where T: MultiwriteNorFlash {}

@@ -1,13 +1,12 @@
+use core::sync::atomic::{AtomicU8, Ordering};
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::{Mutex, Once};
 
-use atomic_polyfill::{AtomicU8, Ordering};
+use embassy_time_driver::{AlarmHandle, Driver};
 use wasm_bindgen::prelude::*;
 use wasm_timer::Instant as StdInstant;
-
-use crate::driver::{AlarmHandle, Driver};
 
 const ALARM_COUNT: usize = 4;
 
@@ -41,8 +40,7 @@ struct TimeDriver {
     zero_instant: UninitCell<StdInstant>,
 }
 
-const ALARM_NEW: AlarmState = AlarmState::new();
-crate::time_driver_impl!(static DRIVER: TimeDriver = TimeDriver {
+embassy_time_driver::time_driver_impl!(static DRIVER: TimeDriver = TimeDriver {
     alarm_count: AtomicU8::new(0),
     once: Once::new(),
     alarms: UninitCell::uninit(),
@@ -52,7 +50,8 @@ crate::time_driver_impl!(static DRIVER: TimeDriver = TimeDriver {
 impl TimeDriver {
     fn init(&self) {
         self.once.call_once(|| unsafe {
-            self.alarms.write(Mutex::new([ALARM_NEW; ALARM_COUNT]));
+            self.alarms
+                .write(Mutex::new([const { AlarmState::new() }; ALARM_COUNT]));
             self.zero_instant.write(StdInstant::now());
         });
     }

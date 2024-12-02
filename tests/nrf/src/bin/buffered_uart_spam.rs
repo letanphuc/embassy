@@ -1,6 +1,7 @@
+// required-features: two-uarts
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
+
 #[path = "../common.rs"]
 mod common;
 
@@ -9,18 +10,13 @@ use core::ptr::NonNull;
 
 use defmt::{assert_eq, *};
 use embassy_executor::Spawner;
-use embassy_nrf::buffered_uarte::{self, BufferedUarte};
+use embassy_nrf::buffered_uarte::{self, BufferedUarteRx};
 use embassy_nrf::gpio::{Level, Output, OutputDrive};
 use embassy_nrf::ppi::{Event, Ppi, Task};
-use embassy_nrf::uarte::Uarte;
-use embassy_nrf::{bind_interrupts, pac, peripherals, uarte};
-use embassy_time::{Duration, Timer};
+use embassy_nrf::uarte::UarteTx;
+use embassy_nrf::{pac, peripherals, uarte};
+use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
-
-bind_interrupts!(struct Irqs {
-    UARTE0_UART0 => buffered_uarte::InterruptHandler<peripherals::UARTE0>;
-    UARTE1 => uarte::InterruptHandler<peripherals::UARTE1>;
-});
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -29,43 +25,40 @@ async fn main(_spawner: Spawner) {
     config.parity = uarte::Parity::EXCLUDED;
     config.baudrate = uarte::Baudrate::BAUD1M;
 
-    let mut tx_buffer = [0u8; 1024];
     let mut rx_buffer = [0u8; 1024];
 
-    mem::forget(Output::new(&mut p.P1_02, Level::High, OutputDrive::Standard));
+    mem::forget(Output::new(&mut peri!(p, PIN_A), Level::High, OutputDrive::Standard));
 
-    let mut u = BufferedUarte::new(
-        p.UARTE0,
+    let mut u = BufferedUarteRx::new(
+        peri!(p, UART0),
         p.TIMER0,
         p.PPI_CH0,
         p.PPI_CH1,
         p.PPI_GROUP0,
-        Irqs,
-        p.P1_03,
-        p.P1_04,
+        irqs!(UART0_BUFFERED),
+        peri!(p, PIN_B),
         config.clone(),
         &mut rx_buffer,
-        &mut tx_buffer,
     );
 
     info!("uarte initialized!");
 
     // uarte needs some quiet time to start rxing properly.
-    Timer::after(Duration::from_millis(10)).await;
+    Timer::after_millis(10).await;
 
     // Tx spam in a loop.
     const NSPAM: usize = 17;
     static mut TX_BUF: [u8; NSPAM] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-    let _spam = Uarte::new(p.UARTE1, Irqs, p.P1_01, p.P1_02, config.clone());
-    let spam_peri: pac::UARTE1 = unsafe { mem::transmute(()) };
-    let event = unsafe { Event::new_unchecked(NonNull::new_unchecked(&spam_peri.events_endtx as *const _ as _)) };
-    let task = unsafe { Task::new_unchecked(NonNull::new_unchecked(&spam_peri.tasks_starttx as *const _ as _)) };
+    let _spam = UarteTx::new(peri!(p, UART1), irqs!(UART1), peri!(p, PIN_A), config.clone());
+    let spam_peri = pac::UARTE1;
+    let event = unsafe { Event::new_unchecked(NonNull::new_unchecked(spam_peri.events_endtx().as_ptr())) };
+    let task = unsafe { Task::new_unchecked(NonNull::new_unchecked(spam_peri.tasks_starttx().as_ptr())) };
     let mut spam_ppi = Ppi::new_one_to_one(p.PPI_CH2, event, task);
     spam_ppi.enable();
-    let p = unsafe { TX_BUF.as_mut_ptr() };
-    spam_peri.txd.ptr.write(|w| unsafe { w.ptr().bits(p as u32) });
-    spam_peri.txd.maxcnt.write(|w| unsafe { w.maxcnt().bits(NSPAM as _) });
-    spam_peri.tasks_starttx.write(|w| unsafe { w.bits(1) });
+    let p = (&raw mut TX_BUF) as *mut u8;
+    spam_peri.txd().ptr().write_value(p as u32);
+    spam_peri.txd().maxcnt().write(|w| w.set_maxcnt(NSPAM as _));
+    spam_peri.tasks_starttx().write_value(1);
 
     let mut i = 0;
     let mut total = 0;

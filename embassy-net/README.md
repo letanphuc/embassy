@@ -4,17 +4,18 @@
 
 It builds on [`smoltcp`](https://github.com/smoltcp-rs/smoltcp). It provides a higher-level and more opinionated
 API. It glues together the components provided by `smoltcp`, handling the low-level details with defaults and
-memory management designed to work well for embedded systems, aiiming for a more "Just Works" experience.
+memory management designed to work well for embedded systems, aiming for a more "Just Works" experience.
 
 ## Features
 
 - IPv4, IPv6
 - Ethernet and bare-IP mediums.
-- TCP, UDP, DNS, DHCPv4, IGMPv4
+- TCP, UDP, DNS, DHCPv4
 - TCP sockets implement the `embedded-io` async traits.
+- Multicast
 
-See the [`smoltcp`](https://github.com/smoltcp-rs/smoltcp) README for a detailed list of implemented and 
-unimplemented features of the network protocols. 
+See the [`smoltcp`](https://github.com/smoltcp-rs/smoltcp) README for a detailed list of implemented and
+unimplemented features of the network protocols.
 
 ## Hardware support
 
@@ -22,7 +23,7 @@ unimplemented features of the network protocols.
 - [`cyw43`](https://github.com/embassy-rs/embassy/tree/main/cyw43) for WiFi on CYW43xx chips, used in the Raspberry Pi Pico W
 - [`embassy-usb`](https://github.com/embassy-rs/embassy/tree/main/embassy-usb) for Ethernet-over-USB (CDC NCM) support.
 - [`embassy-stm32`](https://github.com/embassy-rs/embassy/tree/main/embassy-stm32) for the builtin Ethernet MAC in all STM32 chips (STM32F1, STM32F2, STM32F4, STM32F7, STM32H7, STM32H5).
-- [`embassy-net-w5500`](https://github.com/embassy-rs/embassy/tree/main/embassy-net-w5500) for Wiznet W5500 SPI Ethernet MAC+PHY chip.
+- [`embassy-net-wiznet`](https://github.com/embassy-rs/embassy/tree/main/embassy-net-wiznet) for Wiznet SPI Ethernet MAC+PHY chips (W5100S, W5500)
 - [`embassy-net-esp-hosted`](https://github.com/embassy-rs/embassy/tree/main/embassy-net-esp-hosted) for using ESP32 chips with the [`esp-hosted`](https://github.com/espressif/esp-hosted) firmware as WiFi adapters for another non-ESP32 MCU.
 
 ## Examples
@@ -37,7 +38,7 @@ To add `embassy-net` support for new hardware (i.e. a new Ethernet or WiFi chip,
 an Ethernet/WiFi MCU peripheral), you have to implement the [`embassy-net-driver`](https://crates.io/crates/embassy-net-driver)
 traits.
 
-Alternatively, [`embassy-net-driver-channel`](https://crates.io/crates/embassy-net-driver-channel) provides a higer-level API
+Alternatively, [`embassy-net-driver-channel`](https://crates.io/crates/embassy-net-driver-channel) provides a higher-level API
 to construct a driver that processes packets in its own background task and communicates with the `embassy-net` task via
 packet queues for RX and TX.
 
@@ -49,15 +50,5 @@ trait has not had breaking changes.
 
 This crate can run on any executor.
 
-[`embassy-time`](https://crates.io/crates/embassy-net-driver) is used for timekeeping and timeouts. You must
+[`embassy-time`](https://crates.io/crates/embassy-time) is used for timekeeping and timeouts. You must
 link an `embassy-time` driver in your project to use this crate.
-
-## License
-
-This work is licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
-  http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.

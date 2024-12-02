@@ -1,12 +1,11 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::usart::{BufferedUart, Config};
 use embassy_stm32::{bind_interrupts, peripherals, usart};
-use embedded_io::asynch::BufRead;
+use embedded_io_async::BufRead;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
@@ -22,7 +21,7 @@ async fn main(_spawner: Spawner) {
 
     let mut tx_buf = [0u8; 32];
     let mut rx_buf = [0u8; 32];
-    let mut buf_usart = BufferedUart::new(p.USART3, Irqs, p.PD9, p.PD8, &mut tx_buf, &mut rx_buf, config);
+    let mut buf_usart = BufferedUart::new(p.USART3, Irqs, p.PD9, p.PD8, &mut tx_buf, &mut rx_buf, config).unwrap();
 
     loop {
         let buf = buf_usart.fill_buf().await.unwrap();

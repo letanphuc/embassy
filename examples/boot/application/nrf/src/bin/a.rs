@@ -1,8 +1,10 @@
 #![no_std]
 #![no_main]
 #![macro_use]
-#![feature(type_alias_impl_trait)]
 
+#[cfg(feature = "defmt")]
+use defmt_rtt as _;
+use embassy_boot::State;
 use embassy_boot_nrf::{FirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_embedded_hal::adapter::BlockingAsync;
 use embassy_executor::Spawner;
@@ -23,6 +25,7 @@ async fn main(_spawner: Spawner) {
 
     let mut button = Input::new(p.P0_11, Pull::Up);
     let mut led = Output::new(p.P0_13, Level::Low, OutputDrive::Standard);
+    let mut led_reverted = Output::new(p.P0_14, Level::High, OutputDrive::Standard);
 
     //let mut led = Output::new(p.P1_10, Level::Low, OutputDrive::Standard);
     //let mut button = Input::new(p.P1_02, Pull::Up);
@@ -51,21 +54,28 @@ async fn main(_spawner: Spawner) {
     let nvmc = Nvmc::new(p.NVMC);
     let nvmc = Mutex::new(BlockingAsync::new(nvmc));
 
-    let config = FirmwareUpdaterConfig::from_linkerfile(&nvmc);
-    let mut updater = FirmwareUpdater::new(config);
+    let config = FirmwareUpdaterConfig::from_linkerfile(&nvmc, &nvmc);
+    let mut magic = [0; 4];
+    let mut updater = FirmwareUpdater::new(config, &mut magic);
+    let state = updater.get_state().await.unwrap();
+    if state == State::Revert {
+        led_reverted.set_low();
+    } else {
+        led_reverted.set_high();
+    }
+
     loop {
         led.set_low();
         button.wait_for_any_edge().await;
         if button.is_low() {
             let mut offset = 0;
-            let mut magic = [0; 4];
             for chunk in APP_B.chunks(4096) {
                 let mut buf: [u8; 4096] = [0; 4096];
                 buf[..chunk.len()].copy_from_slice(chunk);
-                updater.write_firmware(&mut magic, offset, &buf).await.unwrap();
+                updater.write_firmware(offset, &buf).await.unwrap();
                 offset += chunk.len();
             }
-            updater.mark_updated(&mut magic).await.unwrap();
+            updater.mark_updated().await.unwrap();
             led.set_high();
             cortex_m::peripheral::SCB::sys_reset();
         }

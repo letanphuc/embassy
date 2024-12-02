@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use core::time::Duration;
 
@@ -8,14 +7,13 @@ use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::bind_interrupts;
 use embassy_stm32::ipcc::{Config, ReceiveInterruptHandler, TransmitInterruptHandler};
+use embassy_stm32::rcc::WPAN_DEFAULT;
 use embassy_stm32_wpan::hci::host::uart::UartHci;
 use embassy_stm32_wpan::hci::host::{AdvertisingFilterPolicy, EncryptionKey, HostHci, OwnAddressType};
 use embassy_stm32_wpan::hci::types::AdvertisingType;
-use embassy_stm32_wpan::hci::vendor::stm32wb::command::gap::{
-    AdvertisingDataType, DiscoverableParameters, GapCommands, Role,
-};
-use embassy_stm32_wpan::hci::vendor::stm32wb::command::gatt::GattCommands;
-use embassy_stm32_wpan::hci::vendor::stm32wb::command::hal::{ConfigData, HalCommands, PowerLevel};
+use embassy_stm32_wpan::hci::vendor::command::gap::{AdvertisingDataType, DiscoverableParameters, GapCommands, Role};
+use embassy_stm32_wpan::hci::vendor::command::gatt::GattCommands;
+use embassy_stm32_wpan::hci::vendor::command::hal::{ConfigData, HalCommands, PowerLevel};
 use embassy_stm32_wpan::hci::BdAddr;
 use embassy_stm32_wpan::lhci::LhciC1DeviceInformationCcrp;
 use embassy_stm32_wpan::TlMbox;
@@ -35,7 +33,7 @@ async fn main(_spawner: Spawner) {
 
         - Obtain a NUCLEO-STM32WB55 from your preferred supplier.
         - Download and Install STM32CubeProgrammer.
-        - Download stm32wb5x_FUS_fw.bin, stm32wb5x_BLE_Stack_full_fw.bin, and Release_Notes.html from
+        - Download stm32wb5x_FUS_fw.bin, stm32wb5x_BLE_Mac_802_15_4_fw.bin, and Release_Notes.html from
           gh:STMicroelectronics/STM32CubeWB@2234d97/Projects/STM32WB_Copro_Wireless_Binaries/STM32WB5x
         - Open STM32CubeProgrammer
         - On the right-hand pane, click "firmware upgrade" to upgrade the st-link firmware.
@@ -44,17 +42,18 @@ async fn main(_spawner: Spawner) {
         - In the Release_Notes.html, find the memory address that corresponds to your device for the stm32wb5x_FUS_fw.bin file
         - Select that file, the memory address, "verify download", and then "Firmware Upgrade".
         - Once complete, in the Release_Notes.html, find the memory address that corresponds to your device for the
-          stm32wb5x_BLE_Stack_full_fw.bin file. It should not be the same memory address.
+          stm32wb5x_BLE_Mac_802_15_4_fw.bin file. It should not be the same memory address.
         - Select that file, the memory address, "verify download", and then "Firmware Upgrade".
         - Select "Start Wireless Stack".
         - Disconnect from the device.
-        - In the examples folder for stm32wb, modify the memory.x file to match your target device.
         - Run this example.
 
         Note: extended stack versions are not supported at this time. Do not attempt to install a stack with "extended" in the name.
     */
 
-    let p = embassy_stm32::init(Default::default());
+    let mut config = embassy_stm32::Config::default();
+    config.rcc = WPAN_DEFAULT;
+    let p = embassy_stm32::init(config);
     info!("Hello World!");
 
     let config = Config::default();
@@ -63,7 +62,7 @@ async fn main(_spawner: Spawner) {
     let sys_event = mbox.sys_subsystem.read().await;
     info!("sys event: {}", sys_event.payload());
 
-    mbox.sys_subsystem.shci_c2_ble_init(Default::default()).await;
+    let _ = mbox.sys_subsystem.shci_c2_ble_init(Default::default()).await;
 
     info!("resetting BLE...");
     mbox.ble_subsystem.reset().await;

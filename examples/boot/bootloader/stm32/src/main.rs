@@ -25,11 +25,9 @@ fn main() -> ! {
     let layout = Flash::new_blocking(p.FLASH).into_blocking_regions();
     let flash = Mutex::new(RefCell::new(layout.bank1_region));
 
-    let config = BootLoaderConfig::from_linkerfile_blocking(&flash);
+    let config = BootLoaderConfig::from_linkerfile_blocking(&flash, &flash, &flash);
     let active_offset = config.active.offset();
-    let mut bl: BootLoader<_, _, _, 2048> = BootLoader::new(config);
-
-    bl.prepare();
+    let bl = BootLoader::prepare::<_, _, _, 2048>(config);
 
     unsafe { bl.load(BANK1_REGION.base + active_offset) }
 }

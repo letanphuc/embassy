@@ -1,4 +1,4 @@
-pub use nrf52832_pac as pac;
+pub use nrf_pac as pac;
 
 /// The maximum buffer size that the EasyDMA can send/recv in one operation.
 pub const EASY_DMA_SIZE: usize = (1 << 8) - 1;
@@ -11,8 +11,9 @@ pub const FORCE_COPY_BUFFER_SIZE: usize = 255;
 pub const FLASH_SIZE: usize = 512 * 1024;
 
 pub const RESET_PIN: u32 = 21;
+pub const APPROTECT_MIN_BUILD_CODE: u8 = b'G';
 
-embassy_hal_common::peripherals! {
+embassy_hal_internal::peripherals! {
     // RTC
     RTC0,
     RTC1,
@@ -149,23 +150,37 @@ embassy_hal_common::peripherals! {
 
     // PDM
     PDM,
+
+    // Radio
+    RADIO,
+
+    // EGU
+    EGU0,
+    EGU1,
+    EGU2,
+    EGU3,
+    EGU4,
+    EGU5,
+
+    // NFC
+    NFCT,
 }
 
-impl_uarte!(UARTE0, UARTE0, UARTE0_UART0);
+impl_uarte!(UARTE0, UARTE0, UARTE0);
 
-impl_spim!(TWISPI0, SPIM0, SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0);
-impl_spim!(TWISPI1, SPIM1, SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1);
-impl_spim!(SPI2, SPIM2, SPIM2_SPIS2_SPI2);
+impl_spim!(TWISPI0, SPIM0, TWISPI0);
+impl_spim!(TWISPI1, SPIM1, TWISPI1);
+impl_spim!(SPI2, SPIM2, SPI2);
 
-impl_spis!(TWISPI0, SPIS0, SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0);
-impl_spis!(TWISPI1, SPIS1, SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1);
-impl_spis!(SPI2, SPIS2, SPIM2_SPIS2_SPI2);
+impl_spis!(TWISPI0, SPIS0, TWISPI0);
+impl_spis!(TWISPI1, SPIS1, TWISPI1);
+impl_spis!(SPI2, SPIS2, SPI2);
 
-impl_twim!(TWISPI0, TWIM0, SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0);
-impl_twim!(TWISPI1, TWIM1, SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1);
+impl_twim!(TWISPI0, TWIM0, TWISPI0);
+impl_twim!(TWISPI1, TWIM1, TWISPI1);
 
-impl_twis!(TWISPI0, TWIS0, SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0);
-impl_twis!(TWISPI1, TWIS1, SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1);
+impl_twis!(TWISPI0, TWIS0, TWISPI0);
+impl_twis!(TWISPI1, TWIS1, TWISPI1);
 
 impl_pwm!(PWM0, PWM0, PWM0);
 impl_pwm!(PWM1, PWM1, PWM1);
@@ -263,12 +278,21 @@ impl_saadc_input!(P0_31, ANALOG_INPUT7);
 
 impl_i2s!(I2S, I2S, I2S);
 
-embassy_hal_common::interrupt_mod!(
-    POWER_CLOCK,
+impl_radio!(RADIO, RADIO, RADIO);
+
+impl_egu!(EGU0, EGU0, EGU0_SWI0);
+impl_egu!(EGU1, EGU1, EGU1_SWI1);
+impl_egu!(EGU2, EGU2, EGU2_SWI2);
+impl_egu!(EGU3, EGU3, EGU3_SWI3);
+impl_egu!(EGU4, EGU4, EGU4_SWI4);
+impl_egu!(EGU5, EGU5, EGU5_SWI5);
+
+embassy_hal_internal::interrupt_mod!(
+    CLOCK_POWER,
     RADIO,
-    UARTE0_UART0,
-    SPIM0_SPIS0_TWIM0_TWIS0_SPI0_TWI0,
-    SPIM1_SPIS1_TWIM1_TWIS1_SPI1_TWI1,
+    UARTE0,
+    TWISPI0,
+    TWISPI1,
     NFCT,
     GPIOTE,
     SAADC,
@@ -279,17 +303,17 @@ embassy_hal_common::interrupt_mod!(
     TEMP,
     RNG,
     ECB,
-    CCM_AAR,
+    AAR_CCM,
     WDT,
     RTC1,
     QDEC,
     COMP_LPCOMP,
-    SWI0_EGU0,
-    SWI1_EGU1,
-    SWI2_EGU2,
-    SWI3_EGU3,
-    SWI4_EGU4,
-    SWI5_EGU5,
+    EGU0_SWI0,
+    EGU1_SWI1,
+    EGU2_SWI2,
+    EGU3_SWI3,
+    EGU4_SWI4,
+    EGU5_SWI5,
     TIMER3,
     TIMER4,
     PWM0,
@@ -297,8 +321,8 @@ embassy_hal_common::interrupt_mod!(
     MWU,
     PWM1,
     PWM2,
-    SPIM2_SPIS2_SPI2,
+    SPI2,
     RTC2,
-    FPU,
     I2S,
+    FPU,
 );

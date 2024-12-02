@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(type_alias_impl_trait)]
 
 use defmt::info;
 use embassy_executor::Spawner;
@@ -9,7 +8,7 @@ use embassy_nrf::{bind_interrupts, peripherals, spis};
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
-    SPIM2_SPIS2_SPI2 => spis::InterruptHandler<peripherals::SPI2>;
+    SPI2 => spis::InterruptHandler<peripherals::SPI2>;
 });
 
 #[embassy_executor::main]

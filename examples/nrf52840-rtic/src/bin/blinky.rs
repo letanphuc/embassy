@@ -4,12 +4,12 @@
 
 use {defmt_rtt as _, panic_probe as _};
 
-#[rtic::app(device = embassy_nrf, peripherals = false, dispatchers = [SWI0_EGU0, SWI1_EGU1])]
+#[rtic::app(device = embassy_nrf, peripherals = false, dispatchers = [EGU0_SWI0, EGU1_SWI1])]
 mod app {
     use defmt::info;
     use embassy_nrf::gpio::{Level, Output, OutputDrive};
     use embassy_nrf::peripherals;
-    use embassy_time::{Duration, Timer};
+    use embassy_time::Timer;
 
     #[shared]
     struct Shared {}
@@ -34,10 +34,10 @@ mod app {
         loop {
             info!("off!");
             led.set_high();
-            Timer::after(Duration::from_millis(300)).await;
+            Timer::after_millis(300).await;
             info!("on!");
             led.set_low();
-            Timer::after(Duration::from_millis(300)).await;
+            Timer::after_millis(300).await;
         }
     }
 }

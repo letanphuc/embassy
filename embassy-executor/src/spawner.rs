@@ -33,7 +33,8 @@ impl<S> SpawnToken<S> {
         }
     }
 
-    pub(crate) fn new_failed() -> Self {
+    /// Return a SpawnToken that represents a failed spawn.
+    pub fn new_failed() -> Self {
         Self {
             raw_task: None,
             phantom: PhantomData,
@@ -114,9 +115,9 @@ impl Spawner {
         }
     }
 
-    // Used by the `embassy_macros::main!` macro to throw an error when spawn
+    // Used by the `embassy_executor_macros::main!` macro to throw an error when spawn
     // fails. This is here to allow conditional use of `defmt::unwrap!`
-    // without introducing a `defmt` feature in the `embassy_macros` package,
+    // without introducing a `defmt` feature in the `embassy_executor_macros` package,
     // which would require use of `-Z namespaced-features`.
     /// Spawn a task into an executor, panicking on failure.
     ///

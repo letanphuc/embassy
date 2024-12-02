@@ -8,24 +8,17 @@ mod thread {
     use core::marker::PhantomData;
     use core::sync::atomic::{AtomicBool, Ordering};
 
-    #[cfg(feature = "nightly")]
-    pub use embassy_macros::main_riscv as main;
+    pub use embassy_executor_macros::main_riscv as main;
 
-    use crate::raw::{Pender, PenderInner};
     use crate::{raw, Spawner};
-
-    #[derive(Copy, Clone)]
-    pub(crate) struct ThreadPender;
-
-    impl ThreadPender {
-        #[allow(unused)]
-        pub(crate) fn pend(self) {
-            SIGNAL_WORK_THREAD_MODE.store(true, core::sync::atomic::Ordering::SeqCst);
-        }
-    }
 
     /// global atomic used to keep track of whether there is work to do since sev() is not available on RISCV
     static SIGNAL_WORK_THREAD_MODE: AtomicBool = AtomicBool::new(false);
+
+    #[export_name = "__pender"]
+    fn __pender(_context: *mut ()) {
+        SIGNAL_WORK_THREAD_MODE.store(true, Ordering::SeqCst);
+    }
 
     /// RISCV32 Executor
     pub struct Executor {
@@ -37,7 +30,7 @@ mod thread {
         /// Create a new Executor.
         pub fn new() -> Self {
             Self {
-                inner: raw::Executor::new(Pender(PenderInner::Thread(ThreadPender))),
+                inner: raw::Executor::new(core::ptr::null_mut()),
                 not_send: PhantomData,
             }
         }
@@ -61,6 +54,10 @@ mod thread {
         ///
         /// This function never returns.
         pub fn run(&'static mut self, init: impl FnOnce(Spawner)) -> ! {
+            unsafe {
+                self.inner.initialize();
+            }
+
             init(self.inner.spawner());
 
             loop {

@@ -2,67 +2,11 @@
 #[allow(unused_imports)]
 #[rustfmt::skip]
 pub mod pac {
-    // The nRF5340 has a secure and non-secure (NS) mode.
-    // To avoid cfg spam, we remove _ns or _s suffixes here.
+    pub use nrf_pac::*;
 
-    pub use nrf5340_app_pac::NVIC_PRIO_BITS;
-    
+    #[cfg(feature = "_ns")]
     #[doc(no_inline)]
-    pub use nrf5340_app_pac::{
-        interrupt,
-        Interrupt,
-        Peripherals,
-
-        cache_s as cache,
-        cachedata_s as cachedata,
-        cacheinfo_s as cacheinfo,
-        clock_ns as clock,
-        comp_ns as comp,
-        cryptocell_s as cryptocell,
-        cti_s as cti,
-        ctrlap_ns as ctrlap,
-        dcnf_ns as dcnf,
-        dppic_ns as dppic,
-        egu0_ns as egu0,
-        ficr_s as ficr,
-        fpu_ns as fpu,
-        gpiote0_s as gpiote,
-        i2s0_ns as i2s0,
-        ipc_ns as ipc,
-        kmu_ns as kmu,
-        lpcomp_ns as lpcomp,
-        mutex_ns as mutex,
-        nfct_ns as nfct,
-        nvmc_ns as nvmc,
-        oscillators_ns as oscillators,
-        p0_ns as p0,
-        pdm0_ns as pdm,
-        power_ns as power,
-        pwm0_ns as pwm0,
-        qdec0_ns as qdec,
-        qspi_ns as qspi,
-        regulators_ns as regulators,
-        reset_ns as reset,
-        rtc0_ns as rtc0,
-        saadc_ns as saadc,
-        spim0_ns as spim0,
-        spis0_ns as spis0,
-        spu_s as spu,
-        tad_s as tad,
-        timer0_ns as timer0,
-        twim0_ns as twim0,
-        twis0_ns as twis0,
-        uarte0_ns as uarte0,
-        uicr_s as uicr,
-        usbd_ns as usbd,
-        usbregulator_ns as usbregulator,
-        vmc_ns as vmc,
-        wdt0_ns as wdt0,
-    };
-    
-    #[cfg(feature = "nrf5340-app-ns")]
-    #[doc(no_inline)]
-    pub use nrf5340_app_pac::{
+    pub use nrf_pac::{
         CLOCK_NS as CLOCK,
         COMP_NS as COMP,
         CTRLAP_NS as CTRLAP,
@@ -131,9 +75,9 @@ pub mod pac {
         WDT1_NS as WDT1,
     };
 
-    #[cfg(feature = "nrf5340-app-s")]
+    #[cfg(feature = "_s")]
     #[doc(no_inline)]
-    pub use nrf5340_app_pac::{
+    pub use nrf_pac::{
         CACHEDATA_S as CACHEDATA,
         CACHEINFO_S as CACHEINFO,
         CACHE_S as CACHE,
@@ -218,7 +162,7 @@ pub const FORCE_COPY_BUFFER_SIZE: usize = 1024;
 
 pub const FLASH_SIZE: usize = 1024 * 1024;
 
-embassy_hal_common::peripherals! {
+embassy_hal_internal::peripherals! {
     // USB
     USBD,
 
@@ -232,11 +176,15 @@ embassy_hal_common::peripherals! {
     // NVMC
     NVMC,
 
+    // NFC
+    NFCT,
+
     // UARTE, TWI & SPI
     SERIAL0,
     SERIAL1,
     SERIAL2,
     SERIAL3,
+    SPIM4,
 
     // SAADC
     SAADC,
@@ -366,9 +314,16 @@ embassy_hal_common::peripherals! {
     P1_13,
     P1_14,
     P1_15,
+
+    // EGU
+    EGU0,
+    EGU1,
+    EGU2,
+    EGU3,
+    EGU4,
+    EGU5,
 }
 
-#[cfg(feature = "nightly")]
 impl_usb!(USBD, USBD, USBD);
 
 impl_uarte!(SERIAL0, UARTE0, SERIAL0);
@@ -380,6 +335,7 @@ impl_spim!(SERIAL0, SPIM0, SERIAL0);
 impl_spim!(SERIAL1, SPIM1, SERIAL1);
 impl_spim!(SERIAL2, SPIM2, SERIAL2);
 impl_spim!(SERIAL3, SPIM3, SERIAL3);
+impl_spim!(SPIM4, SPIM4, SPIM4);
 
 impl_spis!(SERIAL0, SPIS0, SERIAL0);
 impl_spis!(SERIAL1, SPIS1, SERIAL1);
@@ -506,7 +462,14 @@ impl_saadc_input!(P0_18, ANALOG_INPUT5);
 impl_saadc_input!(P0_19, ANALOG_INPUT6);
 impl_saadc_input!(P0_20, ANALOG_INPUT7);
 
-embassy_hal_common::interrupt_mod!(
+impl_egu!(EGU0, EGU0, EGU0);
+impl_egu!(EGU1, EGU1, EGU1);
+impl_egu!(EGU2, EGU2, EGU2);
+impl_egu!(EGU3, EGU3, EGU3);
+impl_egu!(EGU4, EGU4, EGU4);
+impl_egu!(EGU5, EGU5, EGU5);
+
+embassy_hal_internal::interrupt_mod!(
     FPU,
     CACHE,
     SPU,

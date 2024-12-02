@@ -1,10 +1,12 @@
+//! Watchdog Timer (IWDG, WWDG)
 use core::marker::PhantomData;
 
-use embassy_hal_common::{into_ref, Peripheral};
+use embassy_hal_internal::{into_ref, Peripheral};
 use stm32_metapac::iwdg::vals::{Key, Pr};
 
 use crate::rcc::LSI_FREQ;
 
+/// Independent watchdog (IWDG) driver.
 pub struct IndependentWatchdog<'d, T: Instance> {
     wdg: PhantomData<&'d mut T>,
 }
@@ -40,9 +42,13 @@ impl<'d, T: Instance> IndependentWatchdog<'d, T> {
         // Prescaler value
         let psc = 2u16.pow(psc_power);
 
+        #[cfg(not(iwdg_v3))]
+        assert!(psc <= 256, "IWDG prescaler should be no more than 256");
+        #[cfg(iwdg_v3)] // H5, U5, WBA
+        assert!(psc <= 1024, "IWDG prescaler should be no more than 1024");
+
         // Convert prescaler power to PR register value
         let pr = psc_power as u8 - 2;
-        assert!(pr <= 0b110);
 
         // Reload value
         let rl = reload_value(psc, timeout_us);
@@ -60,31 +66,31 @@ impl<'d, T: Instance> IndependentWatchdog<'d, T> {
             rl
         );
 
-        IndependentWatchdog {
-            wdg: PhantomData::default(),
-        }
+        IndependentWatchdog { wdg: PhantomData }
     }
 
+    /// Unleash (start) the watchdog.
     pub fn unleash(&mut self) {
         T::regs().kr().write(|w| w.set_key(Key::START));
     }
 
+    /// Pet (reload, refresh) the watchdog.
     pub fn pet(&mut self) {
         T::regs().kr().write(|w| w.set_key(Key::RESET));
     }
 }
 
-mod sealed {
-    pub trait Instance {
-        fn regs() -> crate::pac::iwdg::Iwdg;
-    }
+trait SealedInstance {
+    fn regs() -> crate::pac::iwdg::Iwdg;
 }
 
-pub trait Instance: sealed::Instance {}
+/// IWDG instance trait.
+#[allow(private_bounds)]
+pub trait Instance: SealedInstance {}
 
 foreach_peripheral!(
     (iwdg, $inst:ident) => {
-        impl sealed::Instance for crate::peripherals::$inst {
+        impl SealedInstance for crate::peripherals::$inst {
             fn regs() -> crate::pac::iwdg::Iwdg {
                 crate::pac::$inst
             }
@@ -104,16 +110,16 @@ mod tests {
         assert_eq!(512_000, get_timeout_us(4, MAX_RL));
 
         assert_eq!(8_000, get_timeout_us(256, 0));
-        assert_eq!(32768_000, get_timeout_us(256, MAX_RL));
+        assert_eq!(32_768_000, get_timeout_us(256, MAX_RL));
 
-        assert_eq!(8000_000, get_timeout_us(64, 3999));
+        assert_eq!(8_000_000, get_timeout_us(64, 3999));
     }
 
     #[test]
     fn can_compute_reload_value() {
         assert_eq!(0xFFF, reload_value(4, 512_000));
-        assert_eq!(0xFFF, reload_value(256, 32768_000));
+        assert_eq!(0xFFF, reload_value(256, 32_768_000));
 
-        assert_eq!(3999, reload_value(64, 8000_000));
+        assert_eq!(3999, reload_value(64, 8_000_000));
     }
 }

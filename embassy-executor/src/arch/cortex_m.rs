@@ -1,24 +1,59 @@
+#[export_name = "__pender"]
+#[cfg(any(feature = "executor-thread", feature = "executor-interrupt"))]
+fn __pender(context: *mut ()) {
+    unsafe {
+        // Safety: `context` is either `usize::MAX` created by `Executor::run`, or a valid interrupt
+        // request number given to `InterruptExecutor::start`.
+
+        let context = context as usize;
+
+        #[cfg(feature = "executor-thread")]
+        // Try to make Rust optimize the branching away if we only use thread mode.
+        if !cfg!(feature = "executor-interrupt") || context == THREAD_PENDER {
+            core::arch::asm!("sev");
+            return;
+        }
+
+        #[cfg(feature = "executor-interrupt")]
+        {
+            use cortex_m::interrupt::InterruptNumber;
+            use cortex_m::peripheral::NVIC;
+
+            #[derive(Clone, Copy)]
+            struct Irq(u16);
+            unsafe impl InterruptNumber for Irq {
+                fn number(self) -> u16 {
+                    self.0
+                }
+            }
+
+            let irq = Irq(context as u16);
+
+            // STIR is faster, but is only available in v7 and higher.
+            #[cfg(not(armv6m))]
+            {
+                let mut nvic: NVIC = core::mem::transmute(());
+                nvic.request(irq);
+            }
+
+            #[cfg(armv6m)]
+            NVIC::pend(irq);
+        }
+    }
+}
+
 #[cfg(feature = "executor-thread")]
 pub use thread::*;
 #[cfg(feature = "executor-thread")]
 mod thread {
+    pub(super) const THREAD_PENDER: usize = usize::MAX;
+
     use core::arch::asm;
     use core::marker::PhantomData;
 
-    #[cfg(feature = "nightly")]
-    pub use embassy_macros::main_cortex_m as main;
+    pub use embassy_executor_macros::main_cortex_m as main;
 
-    use crate::raw::{Pender, PenderInner};
     use crate::{raw, Spawner};
-
-    #[derive(Copy, Clone)]
-    pub(crate) struct ThreadPender;
-
-    impl ThreadPender {
-        pub(crate) fn pend(self) {
-            unsafe { core::arch::asm!("sev") }
-        }
-    }
 
     /// Thread mode executor, using WFE/SEV.
     ///
@@ -39,7 +74,7 @@ mod thread {
         /// Create a new Executor.
         pub fn new() -> Self {
             Self {
-                inner: raw::Executor::new(Pender(PenderInner::Thread(ThreadPender))),
+                inner: raw::Executor::new(THREAD_PENDER as *mut ()),
                 not_send: PhantomData,
             }
         }
@@ -63,6 +98,9 @@ mod thread {
         ///
         /// This function never returns.
         pub fn run(&'static mut self, init: impl FnOnce(Spawner)) -> ! {
+            unsafe {
+                self.inner.initialize();
+            }
             init(self.inner.spawner());
 
             loop {
@@ -79,37 +117,14 @@ mod thread {
 pub use interrupt::*;
 #[cfg(feature = "executor-interrupt")]
 mod interrupt {
-    use core::cell::UnsafeCell;
+    use core::cell::{Cell, UnsafeCell};
     use core::mem::MaybeUninit;
 
-    use atomic_polyfill::{AtomicBool, Ordering};
     use cortex_m::interrupt::InterruptNumber;
     use cortex_m::peripheral::NVIC;
+    use critical_section::Mutex;
 
-    use crate::raw::{self, Pender, PenderInner};
-
-    #[derive(Clone, Copy)]
-    pub(crate) struct InterruptPender(u16);
-
-    impl InterruptPender {
-        pub(crate) fn pend(self) {
-            // STIR is faster, but is only available in v7 and higher.
-            #[cfg(not(armv6m))]
-            {
-                let mut nvic: cortex_m::peripheral::NVIC = unsafe { core::mem::transmute(()) };
-                nvic.request(self);
-            }
-
-            #[cfg(armv6m)]
-            cortex_m::peripheral::NVIC::pend(self);
-        }
-    }
-
-    unsafe impl cortex_m::interrupt::InterruptNumber for InterruptPender {
-        fn number(self) -> u16 {
-            self.0
-        }
-    }
+    use crate::raw;
 
     /// Interrupt mode executor.
     ///
@@ -133,7 +148,7 @@ mod interrupt {
     /// It is somewhat more complex to use, it's recommended to use the thread-mode
     /// [`Executor`] instead, if it works for your use case.
     pub struct InterruptExecutor {
-        started: AtomicBool,
+        started: Mutex<Cell<bool>>,
         executor: UnsafeCell<MaybeUninit<raw::Executor>>,
     }
 
@@ -145,7 +160,7 @@ mod interrupt {
         #[inline]
         pub const fn new() -> Self {
             Self {
-                started: AtomicBool::new(false),
+                started: Mutex::new(Cell::new(false)),
                 executor: UnsafeCell::new(MaybeUninit::uninit()),
             }
         }
@@ -154,7 +169,8 @@ mod interrupt {
         ///
         /// # Safety
         ///
-        /// You MUST call this from the interrupt handler, and from nowhere else.
+        /// - You MUST call this from the interrupt handler, and from nowhere else.
+        /// - You must not call this before calling `start()`.
         pub unsafe fn on_interrupt(&'static self) {
             let executor = unsafe { (&*self.executor.get()).assume_init_ref() };
             executor.poll();
@@ -183,23 +199,20 @@ mod interrupt {
         /// do it after.
         ///
         pub fn start(&'static self, irq: impl InterruptNumber) -> crate::SendSpawner {
-            if self
-                .started
-                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
+            if critical_section::with(|cs| self.started.borrow(cs).replace(true)) {
                 panic!("InterruptExecutor::start() called multiple times on the same executor.");
             }
 
             unsafe {
                 (&mut *self.executor.get())
                     .as_mut_ptr()
-                    .write(raw::Executor::new(Pender(PenderInner::Interrupt(InterruptPender(
-                        irq.number(),
-                    )))))
+                    .write(raw::Executor::new(irq.number() as *mut ()))
             }
 
             let executor = unsafe { (&*self.executor.get()).assume_init_ref() };
+            unsafe {
+                executor.initialize();
+            }
 
             unsafe { NVIC::unmask(irq) }
 
@@ -211,10 +224,10 @@ mod interrupt {
         /// This returns a [`SendSpawner`] you can use to spawn tasks on this
         /// executor.
         ///
-        /// This MUST only be called on an executor that has already been spawned.
+        /// This MUST only be called on an executor that has already been started.
         /// The function will panic otherwise.
         pub fn spawner(&'static self) -> crate::SendSpawner {
-            if !self.started.load(Ordering::Acquire) {
+            if !critical_section::with(|cs| self.started.borrow(cs).get()) {
                 panic!("InterruptExecutor::spawner() called on uninitialized executor.");
             }
             let executor = unsafe { (&*self.executor.get()).assume_init_ref() };
